@@ -1,0 +1,54 @@
+# Student install path: no admin rights, no conda init, no compilers.
+#   1. install pixi   (curl -fsSL https://pixi.sh/install.sh | bash   |  iwr -useb https://pixi.sh/install.ps1 | iex)
+#   2. git clone ... && cd shallow-geophysics
+#   3. pixi run verify
+#
+# Python is pinned to 3.12 because that is the ONLY version with pgcore
+# (pyGIMLi's compiled core) builds on all four of linux-64/osx-64/osx-arm64/win-64.
+# Do not relax this pin without re-checking anaconda.org/gimli/pgcore.
+
+[project]
+name = "shallow-geophysics"
+channels = ["gimli", "conda-forge"]
+platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
+
+[dependencies]
+python = "3.12.*"
+numpy = ">=1.26"
+pandas = ">=2.0"
+scipy = ">=1.11"
+pyproj = ">=3.6"
+matplotlib = ">=3.8"
+
+[feature.seismic.dependencies]
+obspy = ">=1.4"
+
+[feature.model.dependencies]
+discretize = ">=0.10"
+xarray = ">=2024.1"
+netCDF4 = ">=1.6"
+
+[feature.invert.dependencies]
+simpeg = ">=0.22"
+pygimli = ">=1.5"
+
+[feature.masw.pypi-dependencies]
+disba = ">=0.6"
+evodcinv = ">=2.2"
+
+[feature.dev.dependencies]
+pytest = ">=7"
+pytest-cov = "*"
+ruff = "*"
+
+[environments]
+default = ["seismic", "model", "masw"]
+full = ["seismic", "model", "masw", "invert", "dev"]
+dev = ["seismic", "model", "masw", "dev"]
+
+[pypi-dependencies]
+shallow-geophysics = { path = ".", editable = true }
+
+[tasks]
+verify = "python -c \"import shallowgeo; shallowgeo.print_diagnostics()\""
+test = "pytest -q"
