@@ -167,6 +167,22 @@ EXPORTED = DATA / "g857_exported.asc"
 MANUAL = DATA / "g857_manual.txt"
 
 
+class TestFixtureCorpus:
+    """Guard against the corpus being present locally but untracked.
+
+    A `data/` line in .gitignore once matched tests/data/ as well, so these
+    files existed on disk and passed locally while CI checked out a repo
+    without them. Fail with a message that names the actual cause.
+    """
+
+    @pytest.mark.parametrize("sample", [EXPORTED, MANUAL])
+    def test_sample_is_present(self, sample):
+        assert sample.exists(), (
+            f"{sample.name} is missing. If it exists locally but not in CI, "
+            "it is untracked -- check .gitignore for a rule matching tests/data/."
+        )
+
+
 class TestG857Exported:
     """Five-column exported layout, against the real sample in tests/data."""
 

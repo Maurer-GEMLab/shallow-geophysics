@@ -13,8 +13,12 @@ htmlcov/
 .DS_Store
 .ipynb_checkpoints/
 
-# Field data: never commit survey data. Small, anonymised format samples
-# belong in tests/data/ and must be added deliberately with `git add -f`.
+# Field data: never commit bulk survey data. Scoped to the repo root with a
+# leading slash -- a bare `data/` also matches tests/data/, which silently
+# excluded the whole regression corpus.
 *.SGD
 *.sgd
-data/
+/data/
+
+# The format-sample corpus is deliberately tracked.
+!tests/data/
