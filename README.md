@@ -19,7 +19,7 @@ are not yet built. See [docs/roadmap.md](docs/roadmap.md).
 | Active MASW | Geometrics Geode | `geode-seg2` | reads |
 | Passive surface wave | Geometrics ATOM-1C | `atom-seg2` | reads |
 | Ground gravity | Scintrex CG-5 | `cg5` | reads |
-| Ground magnetics | Geometrics G-857 | `g857` | reads (layout unverified) |
+| Ground magnetics | Geometrics G-857 | `g857` | reads |
 
 ERT, GPR, EM, and MT come later; see the
 [originating concept note](docs/concept-summary.md).

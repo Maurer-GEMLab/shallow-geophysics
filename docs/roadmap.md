@@ -25,9 +25,13 @@ Core data model and the four instrument drivers.
 **This is the gate. Everything downstream is built on assumptions that only
 real files can confirm.** Nothing here needs new architecture; it needs data.
 
-- [ ] **Verify the G-857 column layout.** `DEFAULT_COLUMNS` is a documented
-      guess — Geometrics publishes no spec. Run `inspect_g857()` on a real
-      dump, fix the default, add the file to `tests/data/`.
+- [x] **G-857 column layout resolved.** Both layouts in use are supported and
+      detected from the header line: the 5-column export
+      (`Line Station Time Total_Field Quality/Signal`) and the 3-column manual
+      entry (`station time value_nT`). Samples in `tests/data/`.
+- [ ] Confirm the G-857 layouts against a dump from the actual instrument —
+      the samples were written from a specified layout, not exported from
+      hardware, so firmware-specific header wording is still unconfirmed.
 - [ ] Confirm the Geode's `RECEIVER_LOCATION` / `SOURCE_LOCATION` convention
       against files from *your* Geode and firmware. Check whether geometry
       entered in the field software actually lands in the headers.

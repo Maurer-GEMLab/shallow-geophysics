@@ -1,27 +1,34 @@
 """Geometrics G-857 proton-precession magnetometer ASCII dump.
 
-.. warning::
+Two layouts are supported, matching the two ways readings come off this
+instrument in practice.
 
-   **This driver's default column layout is provisional.** Geometrics does not
-   publish the G-857 serial-dump column specification, and MagMap2000 accepts
-   it only as a generic "G-857 / ASCII" import. The default below matches the
-   layout most commonly reported in the field, but it has *not* been validated
-   against a dump from a specific instrument and firmware.
+**Exported** -- five columns, with a commented header line::
 
-   Validate before trusting: run :func:`inspect_g857` on a real dump, confirm
-   the mapping, then either pass ``columns=`` explicitly or update
-   :data:`DEFAULT_COLUMNS` and add the file to ``tests/data``. Until a file
-   from your own G-857 is in the test corpus, treat readings from this driver
-   as unverified.
+    # Line  Station  Time(HH:MM:SS)  Total_Field(nT)  Quality/Signal
+    L001    S001     10:30:15        52431.2          3.0
 
-The layout is therefore configurable rather than fixed::
+**Manual** -- three columns, hand-entered from the instrument display::
 
-    read("SURVEY.ASC", columns=["station", "field", "time", "line"])
+    station  time      value_nT
+    S001     10:30:15  52431.2
 
-Two G-857 workflows matter and are distinguished by ``role``: roving readings
-over the survey grid, and repeat readings at a fixed base station used to
-build the diurnal correction. Pass ``base_station=`` to tag the latter, since
-a magnetics dataset without an identified base is not correctable.
+The column mapping is resolved in three steps, most trustworthy first: an
+explicit ``columns=`` argument, then a header line if the file has one, then
+the column count (three means manual, five means exported). Which route was
+taken is recorded in provenance as ``columns_from``, so a reading whose layout
+was inferred rather than declared is always identifiable.
+
+Geometrics publishes no column specification, so header labels may still vary
+by firmware and by whatever wrote the export. Unrecognised labels are carried
+through under their own names rather than silently dropped, and the column
+mapped to ``field`` is checked against plausible total-field values -- a
+mis-mapped file raises instead of producing quietly wrong magnetics.
+
+Two G-857 workflows matter: roving readings over the survey grid, and repeat
+readings at a fixed base station used to build the diurnal correction. Pass
+``base_station=`` to tag the latter, since a magnetics dataset without an
+identified base is not correctable.
 """
 
 from __future__ import annotations
@@ -37,27 +44,34 @@ from ..core.geometry import Geometry
 from ..core.survey import PointSurvey
 from .base import Driver, _sniff_text
 
-#: Provisional -- see the module warning before relying on this.
-DEFAULT_COLUMNS = ["station", "field", "time", "line"]
+#: Named column layouts, selectable as ``columns="manual"``.
+LAYOUTS: dict[str, list[str]] = {
+    "manual": ["station", "time", "field"],
+    "exported": ["line", "station", "time", "field", "quality"],
+}
 
+#: Used only when a file has no header line, keyed by column count.
+_LAYOUT_BY_WIDTH = {3: "manual", 5: "exported"}
+
+#: Header labels seen in the wild, normalised to canonical names.
+_COLUMN_ALIASES = {
+    "line": "line", "l": "line", "lineid": "line", "line_id": "line",
+    "station": "station", "stn": "station", "sta": "station",
+    "station_id": "station", "stationid": "station", "point": "station",
+    "time": "time", "timestamp": "time", "clock": "time",
+    "date": "date",
+    "field": "field", "total_field": "field", "totalfield": "field",
+    "value_nt": "field", "value": "field", "nt": "field", "mag": "field",
+    "magnetic_field": "field", "reading": "field", "tf": "field",
+    "quality": "quality", "signal": "quality", "signal_strength": "quality",
+    "sq": "quality", "qual": "quality",
+}
+
+_COMMENT_PREFIXES = ("#", "/", ";", "*")
 _TIME_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
-#: Total field at Earth's surface, in nT. Used only to sanity-check that the
-#: column identified as "field" is plausibly a magnetic reading.
+#: Total field at Earth's surface, in nT. Used to sanity-check that the column
+#: identified as "field" is plausibly a magnetic reading.
 _PLAUSIBLE_FIELD = (15_000.0, 90_000.0)
-
-
-def _numeric_records(lines: list[str]) -> list[list[str]]:
-    out = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith(("/", "#", ";", "*")):
-            continue
-        tokens = stripped.replace(",", " ").split()
-        if len(tokens) < 2:
-            continue
-        if any(_looks_numeric(t) or _TIME_RE.match(t) for t in tokens[:3]):
-            out.append(tokens)
-    return out
 
 
 def _looks_numeric(token: str) -> bool:
@@ -68,6 +82,64 @@ def _looks_numeric(token: str) -> bool:
         return False
 
 
+def _normalise_label(token: str) -> str:
+    """Canonical column name for one header token.
+
+    Strips the unit annotations the exported header carries -- ``Time(HH:MM:SS)``
+    becomes ``time``, ``Total_Field(nT)`` becomes ``field`` -- and takes the
+    first half of a slash-joined label, so ``Quality/Signal`` becomes
+    ``quality``.
+    """
+    text = token.strip().lower()
+    text = re.sub(r"\(.*?\)", "", text)
+    text = text.split("/")[0]
+    text = re.sub(r"[^a-z0-9_]", "", text).strip("_")
+    return _COLUMN_ALIASES.get(text, text)
+
+
+def _is_record(tokens: list[str]) -> bool:
+    """Whether a token list is a reading rather than a header or note."""
+    if len(tokens) < 2:
+        return False
+    return any(_looks_numeric(t) or _TIME_RE.match(t) for t in tokens[:3])
+
+
+def _split(line: str) -> list[str]:
+    return line.strip().lstrip("".join(_COMMENT_PREFIXES)).replace(",", " ").split()
+
+
+def _records(lines: list[str]) -> list[list[str]]:
+    """Reading lines, as raw token lists."""
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(_COMMENT_PREFIXES):
+            continue
+        tokens = _split(line)
+        if _is_record(tokens):
+            out.append(tokens)
+    return out
+
+
+def _header_columns(lines: list[str]) -> list[str] | None:
+    """Column names from a header line, commented or not.
+
+    A header is any non-reading line whose tokens include something that maps
+    to ``field`` -- the one column the file is meaningless without.
+    """
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        tokens = _split(line)
+        if not tokens or _is_record(tokens):
+            continue
+        names = [_normalise_label(t) for t in tokens]
+        if "field" in names:
+            return names
+    return None
+
+
 def _is_g857(path: Path) -> bool:
     lines = _sniff_text(path, 60)
     text = "".join(lines).upper()
@@ -75,7 +147,9 @@ def _is_g857(path: Path) -> bool:
         return True
     if "CG-5" in text:  # a CG-5 dump is also plain numeric ASCII
         return False
-    records = _numeric_records(lines)
+    if _header_columns(lines):
+        return True
+    records = _records(lines)
     if len(records) < 3:
         return False
     # Claim the file only if some column is consistently a plausible total
@@ -91,25 +165,59 @@ def _is_g857(path: Path) -> bool:
 
 
 def inspect_g857(path: str | Path, n: int = 10) -> pd.DataFrame:
-    """Return the first *n* parsed records as bare positional columns.
+    """Show how *path* will be parsed: detected columns and the first *n* rows.
 
-    The intended first step with a new instrument: look at what is actually in
-    the file, decide the mapping, then pass it as ``columns=``.
+    The first thing to run against a dump from an unfamiliar firmware. If the
+    columns come back wrong, pass the right ones as ``columns=``.
     """
-    records = _numeric_records(_sniff_text(Path(path), n + 40))[:n]
+    lines = _sniff_text(Path(path), n + 40)
+    records = _records(lines)[:n]
     width = max((len(r) for r in records), default=0)
+    names = _header_columns(lines)
+    if names is None or len(names) != width:
+        layout = _LAYOUT_BY_WIDTH.get(width)
+        names = LAYOUTS[layout] if layout else [f"col{i}" for i in range(width)]
     return pd.DataFrame(
-        [r + [None] * (width - len(r)) for r in records],
-        columns=[f"col{i}" for i in range(width)],
+        [r + [None] * (width - len(r)) for r in records], columns=names[:width]
     )
+
+
+def _resolve_columns(
+    columns: list[str] | str | None, lines: list[str], width: int, path: Path
+) -> tuple[list[str], str]:
+    """Return ``(names, source)`` -- the mapping and how it was determined."""
+    if isinstance(columns, str):
+        if columns not in LAYOUTS:
+            raise ValueError(
+                f"unknown layout {columns!r}; expected one of "
+                f"{sorted(LAYOUTS)} or an explicit list of column names"
+            )
+        return list(LAYOUTS[columns]), "layout_name"
+    if columns is not None:
+        return list(columns), "argument"
+
+    from_header = _header_columns(lines)
+    if from_header is not None and len(from_header) == width:
+        return from_header, "header"
+
+    layout = _LAYOUT_BY_WIDTH.get(width)
+    if layout is None:
+        raise ValueError(
+            f"{path.name}: {width} columns and no usable header line, so the "
+            f"layout cannot be inferred (recognised widths: "
+            f"{sorted(_LAYOUT_BY_WIDTH)}). Pass columns= explicitly, or one of "
+            f"{sorted(LAYOUTS)}."
+        )
+    return list(LAYOUTS[layout]), "column_count"
 
 
 def read_g857(
     path: str | Path,
     *,
-    columns: list[str] | None = None,
+    columns: list[str] | str | None = None,
     date=None,
     base_station=None,
+    min_quality: float | None = None,
     coordinates: dict | pd.DataFrame | None = None,
     spatial_ref: SpatialRef | None = None,
 ) -> PointSurvey:
@@ -118,54 +226,87 @@ def read_g857(
     Parameters
     ----------
     columns
-        Positional column names. Must include ``field``; should include
-        ``station`` and ``time``. Defaults to :data:`DEFAULT_COLUMNS`.
+        Explicit column names, or a layout name from :data:`LAYOUTS`
+        (``"manual"`` or ``"exported"``). Omit to detect from the header line
+        or the column count.
     date
-        Survey date. The G-857 dumps a time of day but not always a date, and
-        diurnal correction needs absolute timestamps.
+        Survey date. The G-857 dumps a time of day but not a date, and diurnal
+        correction needs absolute timestamps. Without it, times are anchored to
+        today and only relative spacing is meaningful.
     base_station
-        Station id occupied repeatedly for diurnal control. Tagged in the
-        readings table as ``is_base``.
+        Station occupied repeatedly for diurnal control. Tagged as ``is_base``.
+    min_quality
+        Drop readings whose ``quality`` column falls below this. The G-857's
+        signal-strength number is the instrument's own statement that a reading
+        is untrustworthy; the count dropped is recorded in provenance.
     coordinates
-        ``{station_id: (x, y, z)}`` or a DataFrame. As with the CG-5, the
-        instrument records no position.
+        ``{station_id: (x, y, z)}`` or a DataFrame. The instrument records no
+        position, so this is how a magnetics survey becomes georeferenced.
     """
     path = Path(path)
     lines = path.read_text(encoding="latin-1", errors="replace").splitlines()
-    records = _numeric_records(lines)
+    records = _records(lines)
     if not records:
         raise ValueError(f"{path.name}: no readings found")
 
-    names = list(columns or DEFAULT_COLUMNS)
+    width = max(len(r) for r in records)
+    names, source = _resolve_columns(columns, lines, width, path)
     if "field" not in names:
-        raise ValueError("columns must include 'field'")
-    width = len(names)
+        raise ValueError(
+            f"columns must include 'field'; got {names}. The total-field "
+            "column is the one reading the file cannot be read without."
+        )
+
+    n = len(names)
     frame = pd.DataFrame(
-        [r[:width] + [None] * (width - len(r)) for r in records], columns=names
+        [r[:n] + [None] * (n - len(r)) for r in records], columns=names
     )
 
     field = pd.to_numeric(frame["field"], errors="coerce")
-    plausible = field.between(*_PLAUSIBLE_FIELD)
-    if plausible.mean() < 0.5:
+    if field.between(*_PLAUSIBLE_FIELD).mean() < 0.5:
         raise ValueError(
             f"{path.name}: the column mapped to 'field' holds values outside "
-            f"{_PLAUSIBLE_FIELD} nT for most records, so the column mapping is "
-            "probably wrong. Run inspect_g857() and pass columns=."
+            f"{_PLAUSIBLE_FIELD} nT for most records, so the column mapping "
+            f"(from {source}) is probably wrong: {names}. "
+            "Run inspect_g857() and pass columns=."
         )
 
     times = _resolve_times(frame, date, path)
     readings = pd.DataFrame(
         {
-            "station_id": frame["station"] if "station" in frame else np.arange(len(frame)),
+            "station_id": (
+                frame["station"] if "station" in frame else np.arange(len(frame))
+            ),
             "time": times,
             "value": field,
         }
     )
     if "line" in frame:
         readings["line"] = frame["line"]
+    if "quality" in frame:
+        # Numeric where the whole column converts, raw otherwise -- some
+        # firmwares write a letter grade rather than a signal number.
+        numeric = pd.to_numeric(frame["quality"], errors="coerce")
+        readings["quality"] = numeric if numeric.notna().all() else frame["quality"]
     if base_station is not None:
         readings["is_base"] = readings["station_id"].astype(str) == str(base_station)
     readings = readings.dropna(subset=["value", "time"]).reset_index(drop=True)
+
+    dropped = 0
+    if min_quality is not None:
+        if "quality" not in readings:
+            raise ValueError(
+                f"{path.name}: min_quality was given but the file has no "
+                f"quality column (columns: {names})"
+            )
+        quality = pd.to_numeric(readings["quality"], errors="coerce")
+        keep = quality >= min_quality
+        dropped = int((~keep).sum())
+        readings = readings[keep].reset_index(drop=True)
+        if readings.empty:
+            raise ValueError(
+                f"{path.name}: min_quality={min_quality} rejected every reading"
+            )
 
     geometry = _build_geometry(readings, coordinates, spatial_ref)
 
@@ -179,17 +320,18 @@ def read_g857(
             "format": "G-857 ASCII dump",
             "base_station": base_station,
             "column_mapping": names,
-            "column_mapping_verified": columns is not None,
+            # Inferred from column count alone is the one route worth doubting.
+            "column_mapping_verified": source != "column_count",
             "source_file": str(path),
         },
     )
     survey.provenance.record(
-        "read",
-        driver="g857",
-        path=str(path),
-        columns=names,
-        columns_from="argument" if columns else "provisional_default",
+        "read", driver="g857", path=str(path), columns=names, columns_from=source
     )
+    if dropped:
+        survey.provenance.record(
+            "quality_filter", min_quality=min_quality, dropped=dropped
+        )
     return survey
 
 
@@ -200,7 +342,10 @@ def _resolve_times(frame: pd.DataFrame, date, path: Path) -> pd.Series:
             "reading times; map one with columns=."
         )
     time_text = frame["time"].astype(str)
-    if date is not None:
+    if date is None and "date" in frame:
+        stamp = frame["date"].astype(str) + " " + time_text
+        times = pd.to_datetime(stamp, errors="coerce")
+    elif date is not None:
         stamp = pd.Timestamp(date).strftime("%Y-%m-%d") + " " + time_text
         times = pd.to_datetime(stamp, errors="coerce")
     else:
@@ -253,7 +398,7 @@ def _build_geometry(readings, coordinates, spatial_ref) -> Geometry:
 
 driver = Driver(
     name="g857",
-    description="Geometrics G-857 proton magnetometer ASCII dump (PROVISIONAL)",
+    description="Geometrics G-857 proton magnetometer ASCII dump",
     can_open=_is_g857,
     read=read_g857,
     extensions=(".asc", ".txt", ".dat", ".mag"),
@@ -261,8 +406,7 @@ driver = Driver(
     vendor="Geometrics",
     instrument="G-857",
     notes=(
-        "Column layout is UNVALIDATED -- Geometrics publishes no spec. "
-        "Run inspect_g857() and pass columns= until a real dump is in the "
-        "test corpus."
+        "Reads the 5-column exported layout and the 3-column manual layout; "
+        "columns are taken from the header line when present."
     ),
 )

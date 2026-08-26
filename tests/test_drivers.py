@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -160,39 +162,137 @@ class TestCG5:
         assert s.geometry.stations["x"].tolist() == [0, 10, 20]
 
 
-class TestG857:
-    def test_identified(self, g857_file):
-        assert identify(g857_file)[0].name == "g857"
+DATA = Path(__file__).parent / "data"
+EXPORTED = DATA / "g857_exported.asc"
+MANUAL = DATA / "g857_manual.txt"
 
-    def test_readings(self, g857_file):
-        s = read(g857_file, date="2026-03-12")
-        assert s.quantity == "total_field" and s.units == "nT"
-        assert s.n_readings == 4
-        assert s.readings["value"].max() == pytest.approx(52344.1)
 
-    def test_provisional_mapping_is_flagged(self, g857_file):
-        s = read(g857_file, date="2026-03-12")
-        assert s.metadata["column_mapping_verified"] is False
-        assert s.provenance[0].parameters["columns_from"] == "provisional_default"
+class TestG857Exported:
+    """Five-column exported layout, against the real sample in tests/data."""
 
-    def test_explicit_mapping_is_marked_verified(self, g857_file):
-        s = read(g857_file, date="2026-03-12",
-                 columns=["station", "field", "time", "line"])
+    def test_identified(self):
+        assert identify(EXPORTED)[0].name == "g857"
+
+    def test_columns_come_from_header(self):
+        s = read(EXPORTED, date="2026-03-12")
+        assert s.metadata["column_mapping"] == [
+            "line", "station", "time", "field", "quality"
+        ]
+        assert s.provenance[0].parameters["columns_from"] == "header"
         assert s.metadata["column_mapping_verified"] is True
 
-    def test_base_station_tagged(self, g857_file):
-        s = read(g857_file, date="2026-03-12", base_station=100)
+    def test_values_and_units(self):
+        s = read(EXPORTED, date="2026-03-12")
+        assert s.quantity == "total_field" and s.units == "nT"
+        assert s.n_readings == 5
+        assert s.readings["value"].iloc[0] == pytest.approx(52431.2)
+        assert s.readings["value"].max() == pytest.approx(52450.1)
+
+    def test_string_station_ids_are_not_coerced(self):
+        s = read(EXPORTED, date="2026-03-12")
+        assert s.readings["station_id"].iloc[0] == "S001"
+        assert set(s.geometry.stations["id"]) == {"S001", "S002", "S003", "S004"}
+
+    def test_line_and_quality_carried_through(self):
+        s = read(EXPORTED, date="2026-03-12")
+        assert s.readings["line"].iloc[0] == "L001"
+        assert s.readings["quality"].iloc[2] == pytest.approx(2.8)
+
+    def test_times_parsed_with_supplied_date(self):
+        s = read(EXPORTED, date="2026-03-12")
+        first = s.readings["time"].iloc[0]
+        assert (first.year, first.month, first.day) == (2026, 3, 12)
+        assert first.strftime("%H:%M:%S") == "10:30:15"
+
+    def test_repeat_occupation_detected(self):
+        # S001 is read twice, 35 minutes apart: the diurnal control pair.
+        s = read(EXPORTED, date="2026-03-12")
+        means = s.station_means().set_index("station_id")
+        assert means.loc["S001", "n"] == 2
+
+    def test_base_station_tagged(self):
+        s = read(EXPORTED, date="2026-03-12", base_station="S001")
         assert s.readings["is_base"].sum() == 2
 
-    def test_wrong_mapping_is_caught(self, g857_file):
-        with pytest.raises(ValueError, match="column mapping"):
-            read(g857_file, date="2026-03-12",
-                 columns=["field", "station", "time", "line"])
+    def test_min_quality_filters_and_records(self):
+        s = read(EXPORTED, date="2026-03-12", min_quality=2.9)
+        assert s.n_readings == 4          # only S003, at 2.8, falls below
+        assert s.provenance.applied("quality_filter")
+        assert s.provenance[-1].parameters["dropped"] == 1
 
-    def test_inspect_shows_positional_columns(self, g857_file):
-        frame = inspect_g857(g857_file)
-        assert list(frame.columns) == ["col0", "col1", "col2", "col3"]
-        assert len(frame) == 4
+    def test_min_quality_rejecting_everything_raises(self):
+        with pytest.raises(ValueError, match="rejected every reading"):
+            read(EXPORTED, date="2026-03-12", min_quality=99.0)
+
+
+class TestG857Manual:
+    """Three-column hand-entered layout, uncommented header."""
+
+    def test_identified(self):
+        assert identify(MANUAL)[0].name == "g857"
+
+    def test_uncommented_header_is_detected(self):
+        s = read(MANUAL, date="2026-03-12")
+        assert s.metadata["column_mapping"] == ["station", "time", "field"]
+        assert s.provenance[0].parameters["columns_from"] == "header"
+
+    def test_values(self):
+        s = read(MANUAL, date="2026-03-12")
+        assert s.n_readings == 3
+        assert s.readings["value"].iloc[0] == pytest.approx(52431.2)
+        assert s.readings["station_id"].iloc[2] == "S003"
+
+    def test_no_quality_column(self):
+        s = read(MANUAL, date="2026-03-12")
+        assert "quality" not in s.readings
+        with pytest.raises(ValueError, match="no quality column"):
+            read(MANUAL, date="2026-03-12", min_quality=2.0)
+
+
+class TestG857LayoutResolution:
+    def test_layout_name_accepted(self, tmp_path):
+        p = tmp_path / "bare.txt"
+        p.write_text("S001 10:30:15 52431.2\nS002 10:30:20 52428.5\n")
+        s = read(p, driver="g857", columns="manual", date="2026-03-12")
+        assert s.provenance[0].parameters["columns_from"] == "layout_name"
+        assert s.readings["value"].iloc[0] == pytest.approx(52431.2)
+
+    def test_unknown_layout_name_raises(self, tmp_path):
+        p = tmp_path / "bare.txt"
+        p.write_text("S001 10:30:15 52431.2\n")
+        with pytest.raises(ValueError, match="unknown layout"):
+            read(p, driver="g857", columns="nope")
+
+    def test_headerless_file_falls_back_to_column_count(self, tmp_path):
+        p = tmp_path / "bare.txt"
+        p.write_text("S001 10:30:15 52431.2\nS002 10:30:20 52428.5\n")
+        s = read(p, driver="g857", date="2026-03-12")
+        assert s.provenance[0].parameters["columns_from"] == "column_count"
+        # Inferred from width alone is the one route we do not vouch for.
+        assert s.metadata["column_mapping_verified"] is False
+
+    def test_unrecognised_width_raises_actionable_error(self, tmp_path):
+        p = tmp_path / "odd.txt"
+        p.write_text("S001 10:30:15 52431.2 3.0\nS002 10:30:20 52428.5 3.0\n")
+        with pytest.raises(ValueError, match="layout cannot be inferred"):
+            read(p, driver="g857")
+
+    def test_explicit_columns_override_header(self):
+        s = read(EXPORTED, date="2026-03-12",
+                 columns=["line", "station", "time", "field", "signal"])
+        assert s.provenance[0].parameters["columns_from"] == "argument"
+
+    def test_wrong_mapping_is_caught(self):
+        with pytest.raises(ValueError, match="probably wrong"):
+            read(EXPORTED, date="2026-03-12",
+                 columns=["line", "station", "field", "time", "quality"])
+
+    def test_inspect_reports_detected_columns(self):
+        frame = inspect_g857(EXPORTED)
+        assert list(frame.columns) == [
+            "line", "station", "time", "field", "quality"
+        ]
+        assert len(frame) == 5
 
 
 class TestTopLevelAPI:
