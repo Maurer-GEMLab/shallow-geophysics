@@ -20,8 +20,9 @@ publishing — this repository is public.
    firmware version, acquisition software, and anything unusual.
 2. Add a test in `tests/test_drivers.py` asserting the values you know to be
    correct — not just that parsing succeeds.
-3. `.gitignore` excludes bulk data directories by design; add samples
-   deliberately with `git add -f`.
+3. Commit normally — this directory is explicitly un-ignored. `.gitignore`
+   excludes `/data/` at the repo root for bulk field data, but not here. If a
+   sample seems to vanish on commit, check `git check-ignore -v <path>`.
 
 ## What is most useful right now
 
