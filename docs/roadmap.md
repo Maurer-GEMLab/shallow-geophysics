@@ -38,6 +38,11 @@ real files can confirm.** Nothing here needs new architecture; it needs data.
 - [ ] Check the ATOM `.ATM` native format. If SEG-2 export is lossy or
       awkward at scale, `.ATM` may need reverse-engineering.
 - [ ] Build `tests/data/` into a real regression corpus.
+- [ ] **Verify the pixi environment actually solves on all four platforms.**
+      CI currently tests only the pip path (`pip install -e ".[seismic,test]"`),
+      so ADR-002's install claim rests on reading the `pgcore` build matrix, not
+      on a real solve. Add a `pixi install` CI job and commit `pixi.lock` before
+      any student runs the setup.
 
 ## Milestone 3 — corrections
 
