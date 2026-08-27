@@ -12,7 +12,7 @@ Scope of this release: seismic refraction, MASW and passive surface wave,
 ground gravity, and ground magnetics.
 """
 
-from . import core, drivers
+from . import core, drivers, positions
 from .core import (
     Geometry,
     PointSurvey,
@@ -23,11 +23,13 @@ from .core import (
     local_grid,
 )
 from .drivers import identify, read
+from .positions import PositionTable, read_positions
 
 __version__ = "0.0.1.dev0"
 
 __all__ = [
-    "core", "drivers", "read", "identify",
+    "core", "drivers", "positions", "read", "identify",
+    "read_positions", "PositionTable",
     "Geometry", "SpatialRef", "local_grid", "Provenance",
     "Survey", "SeismicSurvey", "PointSurvey",
     "print_diagnostics", "__version__",

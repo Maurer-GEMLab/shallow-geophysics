@@ -48,6 +48,23 @@ real files can confirm.** Nothing here needs new architecture; it needs data.
       on a real solve. Add a `pixi install` CI job and commit `pixi.lock` before
       any student runs the setup.
 
+## Milestone 2b — GNSS positioning ✅ done
+
+`shallowgeo.positions`. Consumes corrected exports; does not process RINEX
+(ADR-003).
+
+- [x] `PositionTable` — ground-mark heights and absolute UTC as enforced invariants
+- [x] Profile-driven reader; a new receiver is a `PROFILES` entry, not a new reader
+- [x] Required `heights_are=` declaration and antenna-height reduction
+- [x] `require_status()` — gate on FIX/FLOAT, not on reported RMS
+- [x] Duplicate-name and coincident-mark detection
+- [x] `BaseStation` from coordinates, a one-row CSV, or a table; `apply_base_shift()`
+- [x] `match_occupations()` / `attach_positions()` — UTC time-window matching
+- [ ] Add a **Trimble** profile once a sample export is available
+- [ ] Geoid model (GEOID18) for ellipsoidal → orthometric. Not urgent: over a
+      ~200 m line the geoid gradient is negligible, so *relative* gravity is
+      fine on ellipsoidal heights. Absolute values are not.
+
 ## Milestone 3 — corrections
 
 The per-method processing that makes readings interpretable. Each correction

@@ -21,6 +21,10 @@ are not yet built. See [docs/roadmap.md](docs/roadmap.md).
 | Ground gravity | Scintrex CG-5 | `cg5` | reads |
 | Ground magnetics | Geometrics G-857 | `g857` | reads |
 
+Station positioning is handled by `shallowgeo.positions`, which consumes
+*corrected* GNSS exports (Emlid Reach, and any CSV whose headers match) — it
+does not process RINEX. See [ADR-003](docs/architecture.md).
+
 ERT, GPR, EM, and MT come later; see the
 [originating concept note](docs/concept-summary.md).
 
@@ -77,6 +81,15 @@ noise = read_atom_array(sorted(Path("deployment").glob("*.DAT")))
 # Gravity. The CG-5 records station numbers, never positions.
 grav = sg.read("GRAV.TXT", coordinates=positions, spatial_ref=utm15)
 print(grav.station_means())       # repeat-occupation scatter = your error bar
+
+# GNSS. heights_are is required -- see below.
+from shallowgeo.positions import BaseStation, apply_base_shift, attach_positions
+
+pos = sg.read_positions("stations.csv", heights_are="antenna_phase_center")
+pos = pos.require_status("FIX")                    # gate on status, not RMS
+pos = apply_base_shift(pos, BaseStation.from_csv("ppp_base.csv",
+                                                 heights_are="ground_mark"))
+grav = attach_positions(grav, pos)                 # matched on absolute UTC
 ```
 
 Command line:
@@ -110,6 +123,13 @@ knowing which corrections are already in it, and the CG-5's own options block
 changes the meaning of the numbers it exports. The `cg5` driver parses that
 block and records instrument-applied tide, tilt, and terrain corrections as
 provenance steps, so a later correction can refuse to double-apply.
+
+**Antenna height is never assumed.** `read_positions` requires
+`heights_are=` — whether the file's heights sit at the ground mark or the
+antenna phase centre. Exports rarely record which, and the difference is a
+constant offset the size of the pole: for a 2.13 m antenna that is 0.66 mGal of
+free-air error, which on a low-relief line can exceed the entire signal.
+A `PositionTable` is guaranteed to hold ground-mark heights and absolute UTC.
 
 **Every dataset declares a CRS and a vertical datum.** `Geometry` cannot be
 constructed without one, and combining ellipsoidal with orthometric heights

@@ -32,5 +32,6 @@ publishing — this repository is public.
 | **High** | Geode SEG-2 with geometry *not* entered | The common teaching-lab case |
 | Medium | G-857 dump from the real instrument | Confirms firmware header wording |
 | Medium | ATOM-1C SEG-2 export | Confirms the GPS header key |
+| Medium | Trimble GNSS point export | Adds a second positions profile |
 | Medium | CG-5 `.TXT` dump | Confirms column labels per firmware |
 | Low | ATOM-1C native `.ATM` | Would need reverse-engineering |

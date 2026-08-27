@@ -136,3 +136,69 @@ an inversion dependency they did not install.
 
 `anaconda.org/gimli/pgcore` gains win-64 builds beyond py312, or pyGIMLi
 publishes broadly-tagged macOS wheels.
+
+---
+
+## ADR-003: Consume corrected GNSS solutions; do not process RINEX
+
+**Status:** accepted, 2026-08-27
+
+### Context
+
+Station positions come from Emlid Reach RS2/RS3 receivers in RTK, base plus
+rover. The base is post-processed through CSRS-PPP; rovers are computed in
+Emlid Studio from base and rover RINEX plus navigation files. The question is
+whether this package should process RINEX itself.
+
+### Decision
+
+**No.** `shallowgeo.positions` consumes corrected position exports.
+
+RTKLIB is the de facto engine — Emlid Studio wraps it, as do RTKPOST and
+rtklib-py — and CSRS-PPP is a government service with no open equivalent of
+comparable quality. Reimplementing either is a specialty project, contradicts
+the concept note's own principle of wrapping mature solvers, and would require
+compiled code, which ADR-002's compiler-free student install rules out.
+
+RINEX belongs in **provenance, not input**: record which files and which
+software produced a solution; do not reprocess them.
+
+### The actual work is downstream of the solution
+
+Auditing one real Emlid export surfaced six failure modes, none of which
+involve GNSS processing and all of which silently corrupt a gravity survey:
+
+1. **Antenna height.** 2.134 m, and the export does not say whether the
+   heights are at the phase centre or the ground mark. At 0.3086 mGal/m that is
+   0.659 mGal — against 2.914 m of total relief, i.e. 0.899 mGal of actual
+   signal. The ambiguity is 73% of the measurement. Hence `heights_are=` is
+   required with no default, and a `PositionTable` is ground-mark by construction.
+2. **UTC offsets that change mid-occupation.** 11 of 21 rows started at
+   `UTC-05:00` and ended at `UTC-04:00`. Correctly parsed: 35 s. Naively: 3635 s.
+   This breaks occupation matching specifically.
+3. **A station named like the base that is not the base.** `999 - Base` was a
+   rover occupation 15.56 m away; the authoritative coordinate is in the
+   export's `Base *` columns. Confusing them costs 1.167 m vertically —
+   0.360 mGal. `apply_base_shift` refuses shifts beyond `max_shift_m`.
+4. **A name reused at two marks 39 m apart**, one FIX and one FLOAT. Any
+   dictionary-keyed join takes one silently; `on_duplicate="error"` is default.
+5. **FLOAT solutions with deceptively good RMS.** One FLOAT row reported the
+   same vertical RMS as the FIX rows. Gate on status, never on RMS.
+6. **Empty projected columns.** `Easting`/`Northing`/`Elevation` present but
+   entirely unpopulated; only the geographic columns held data.
+
+### Consequences
+
+- Formats are **profiles**, not readers. Trimble is expected to differ and
+  should be a `PROFILES` entry plus header aliases.
+- The base station accepts plain coordinates, a one-row CSV, or a row from a
+  table — all three go through the same antenna-height declaration.
+- Matching is on absolute UTC, never on station name, which makes it an
+  independent check: `name_agrees` flags a station mislabelled in the meter.
+- Ellipsoidal heights are kept as such. A geoid model is needed for absolute
+  gravity; over a ~200 m line the geoid gradient is negligible for relative work.
+
+### Revisit when
+
+A receiver in use emits no post-processed export, or the course needs PPP
+without internet access.
