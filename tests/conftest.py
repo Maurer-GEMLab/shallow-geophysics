@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 from seg2_writer import write_seg2  # noqa: E402
+from segy_writer import write_segy  # noqa: E402
 
 
 @pytest.fixture
@@ -121,3 +122,86 @@ def g857_file(tmp_path):
         encoding="latin-1",
     )
     return path
+
+
+@pytest.fixture
+def geode_file_feet(tmp_path):
+    """What a SeisModule Controller actually writes: UNITS FEET, a 1 ms DELAY."""
+    rng = np.random.default_rng(3)
+    data = rng.normal(size=(24, 400)).astype("f4")
+    path = tmp_path / "26.dat"
+    write_seg2(
+        path,
+        data,
+        sample_interval=0.00025,
+        file_header={
+            "ACQUISITION_DATE": "19/Sep/2025",
+            "ACQUISITION_TIME": "15:25:25",
+            "COMPANY": "Geometrics",
+            "INSTRUMENT": "GEOMETRICS SEISMODULES CONTROLLER 0000",
+            "UNITS": "FEET",
+            "NOTE": "BASE_INTERVAL 4.00 \\n SHOT_INCREMENT 0.00 \\n PHONE_INCREMENT 0.00",
+        },
+        trace_headers=[
+            {
+                "RECEIVER_LOCATION": f"{i * 4.0:.2f}",
+                "SOURCE_LOCATION": "-12.00",
+                "DELAY": "0.001",
+                "SHOT_SEQUENCE_NUMBER": "26",
+                "STACK": "8",
+                "FIXED_GAIN": "36 DB",
+                "DESCALING_FACTOR": "4.270400E-005",
+            }
+            for i in range(24)
+        ],
+    )
+    return path
+
+
+@pytest.fixture
+def segy_file(tmp_path):
+    """SeisModule SEG-Y export: IBM float, big-endian, feet, along-line geometry."""
+    rng = np.random.default_rng(4)
+    data = rng.normal(size=(24, 256)) * 1e4
+    path = tmp_path / "4001.sgy"
+    write_segy(
+        path, data, 0.000125,
+        group_x=[4.0 * i for i in range(24)], source_x=112.0,
+        measurement_system=2, format_code=1, field_record=4001,
+        year=26, day_of_year=254, hms=(13, 19, 34),
+    )
+    return path, data
+
+
+@pytest.fixture
+def segy_file_ieee_metric(tmp_path):
+    data = np.random.default_rng(5).normal(size=(6, 64))
+    path = tmp_path / "metric.segy"
+    write_segy(path, data, 0.0005, group_x=[2.0 * i for i in range(6)], source_x=-4.0,
+               measurement_system=1, format_code=5, endian="<", text="SOME OTHER SYSTEM")
+    return path, data
+
+
+@pytest.fixture
+def segy_file_no_geometry(tmp_path):
+    path = tmp_path / "nogeom.sgy"
+    write_segy(path, np.zeros((6, 64)), 0.0005, group_x=[0.0] * 6, source_x=0.0)
+    return path
+
+
+@pytest.fixture
+def segy_file_two_records(tmp_path):
+    """One SEG-Y holding two field records of the same spread, as the
+    SeisModule writes when a group of shots is saved together."""
+    rng = np.random.default_rng(11)
+    data = rng.normal(size=(48, 128)) * 1e4
+    group_x = [4.0 * i for i in range(24)]
+    first, second = tmp_path / "_a.sgy", tmp_path / "_b.sgy"
+    write_segy(first, data[:24], 0.000125, group_x=group_x, source_x=112.0,
+               measurement_system=2, format_code=1, field_record=4017)
+    write_segy(second, data[24:], 0.000125, group_x=group_x, source_x=92.0,
+               measurement_system=2, format_code=1, field_record=4018)
+    path = tmp_path / "4017.sgy"
+    # Append the second file's traces to the first file's headers.
+    path.write_bytes(first.read_bytes() + second.read_bytes()[3600:])
+    return path, data

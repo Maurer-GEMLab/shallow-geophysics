@@ -16,9 +16,9 @@ Core data model and the four instrument drivers.
 - [x] `SeismicSurvey` / `PointSurvey`
 - [x] Entry-point driver registry with content sniffing
 - [x] SEG-2 parser (shared by Geode and ATOM)
-- [x] `geode-seg2`, `atom-seg2`, `cg5`, `g857` drivers
+- [x] `geode-seg2`, `geode-segy`, `atom-seg2`, `cg5`, `g857` drivers
 - [x] CLI: `info`, `identify`, `read`
-- [x] 57 tests, synthetic SEG-2 fixture writer
+- [x] Synthetic SEG-2 and SEG-Y fixture writers
 
 ## Milestone 2 — validate against real instruments 🔜 next
 
@@ -32,9 +32,19 @@ real files can confirm.** Nothing here needs new architecture; it needs data.
 - [ ] Confirm the G-857 layouts against a dump from the actual instrument —
       the samples were written from a specified layout, not exported from
       hardware, so firmware-specific header wording is still unconfirmed.
-- [ ] Confirm the Geode's `RECEIVER_LOCATION` / `SOURCE_LOCATION` convention
-      against files from *your* Geode and firmware. Check whether geometry
-      entered in the field software actually lands in the headers.
+- [x] **Geode SEG-2 convention confirmed** against 12 SeisModule Controller
+      records (Sep 2025 to Sep 2026). Geometry entered in the field software
+      does land in `RECEIVER_LOCATION` / `SOURCE_LOCATION` as along-line
+      distances. Two things the synthetic fixtures had wrong: the files
+      declare `UNITS FEET`, and `INSTRUMENT` reads
+      `GEOMETRICS SEISMODULES CONTROLLER`, not "GEODE". Both fixed; the
+      driver converts to metres and records the factor in provenance.
+- [x] **SeisModule SEG-Y export supported** (`geode-segy`): rev 0, IBM
+      float, along-line geometry in `source_x`/`group_x`, feet flagged in
+      the binary header. Confirmed against 8 records.
+- [x] Trace `DELAY` is honoured on the time axis (`SeismicSurvey.delay`).
+- [ ] Commit one clean shot record of each format to `tests/data/` (the
+      validation set was not a coherent survey; see `tests/data/README.md`).
 - [ ] Confirm ATOM-1C SEG-2 export: which GPS header key it writes, and
       whether `UNIT_NUMBER` carries the node serial.
 - [ ] Confirm CG-5 column header text on your firmware. The `Tilt x` / `Tilt y`
@@ -73,8 +83,23 @@ checks `provenance.applied()` and refuses to double-apply.
 - [ ] Gravity: drift (from repeat base occupations), Longman tide, latitude,
       free-air, Bouguer slab, terrain
 - [ ] Magnetics: diurnal from base station, IGRF regional removal
-- [ ] Seismic: first-break picking assistance, geometry QC, trace editing
-- [ ] Surface wave: dispersion via `swprocess`-style wavefield transforms
+- [x] Seismic: first-break picking (`refraction.pick_first_breaks`: AIC,
+      MER, STA/LTA) with `plot_picks` for checking by eye
+- [x] Seismic: hand correction of picks across a whole line
+      (`refraction.PickingSession`, `load_shots`), saved to and reloaded from
+      CSV, with an `ipywidgets` panel used by
+      `notebooks/refraction_field_data.ipynb`
+- [x] Seismic: horizontal-layer interpretation, 2 and 3 layers
+      (`refraction.fit_layers`, intercept-time method with automatic branch
+      search, or branch boundaries fixed by hand with `crossovers=`)
+- [ ] Seismic: dipping-interface interpretation from forward and reverse shots
+- [ ] Seismic: geometry QC (reciprocal times), trace editing, amplitude
+      descaling from `DESCALING_FACTOR` / `FIXED_GAIN`
+- [x] Surface wave: phase-shift dispersion imaging and ridge picking
+      (`surfacewave.dispersion_image`, `DispersionImage.pick`)
+- [x] Surface wave: layered Vs forward model via `disba` and a fixed- or
+      free-thickness least-squares inversion (`surfacewave.invert_dispersion`)
+- [ ] Surface wave: `evodcinv` wrapper for global search; higher modes
 
 ## Milestone 4 — model layer (ADR-001)
 
@@ -85,7 +110,9 @@ checks `provenance.applied()` and refuses to double-apply.
 
 ## Milestone 5 — method wrappers (Layer 2)
 
-- [ ] Refraction → pyGIMLi `TravelTimeManager`
+- [ ] Refraction → pyGIMLi `TravelTimeManager`. Design notes and data
+      requirements are in `shallowgeo.refraction.tomography`; needs dense
+      multi-shot coverage that the current teaching lines do not have.
 - [ ] Gravity, magnetics → SimPEG `potential_fields`
 - [ ] Surface wave → `disba` / `evodcinv` 1D, projected onto the canonical grid
 
@@ -100,9 +127,21 @@ An enabled capability, not a solved problem.
 GUI (Layer 4), ERT, GPR, EM, MT, live instrument control. See
 [concept-summary.md](concept-summary.md).
 
+## Field-procedure notes from the validation data
+
+- Records were 128-200 ms, cut for refraction. MASW on the same shots is
+  limited to roughly 15 Hz and up because low-frequency surface waves are
+  clipped at far offsets. Record at least 1 s when MASW is a goal.
+- Far-offset traces on several records were clipped or noise-dominated;
+  the AIC picker's `quality` column separates them, but a student must
+  still look at `plot_picks` output.
+
 ## Open questions
 
-- Does the Geode write anything useful into `NOTE` that we should parse?
+- [x] Does the Geode write anything useful into `NOTE`? Yes: `BASE_INTERVAL`,
+      `SHOT_INCREMENT`, `PHONE_INCREMENT`, `AGC_WINDOW`, `DISPLAY_FILTERS`.
+      Parsed into `metadata["note"]`; `BASE_INTERVAL` is a cross-check on
+      the receiver spacing.
 - Is there a Geometrics-documented SEG-2 key list, or is the community
   reverse-engineering effort the only source?
 - For passive MASW, do we standardize on SPAC, ReMi, or beamforming first?

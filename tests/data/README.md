@@ -6,9 +6,33 @@ drivers keep working as vendor firmware changes.
 Currently holds the two G-857 layouts (`g857_exported.asc`,
 `g857_manual.txt`), written from layouts specified by the instrument owner
 rather than exported from hardware — so header wording on a given firmware is
-still unconfirmed. Everything else is validated only against the synthetic
-SEG-2 fixtures in `tests/conftest.py`, which encode our *assumptions* about
-each format rather than its reality.
+still unconfirmed — and the Emlid Reach GNSS export. Everything else is
+validated against the synthetic SEG-2 and SEG-Y fixtures written by
+`tests/seg2_writer.py` and `tests/segy_writer.py`.
+
+## Validated against real files but not yet committed
+
+The Geode SEG-2 and SeisModule SEG-Y drivers were run against twelve SEG-2
+shot records and eight SEG-Y records exported by a Geometrics SeisModule
+Controller between September 2025 and September 2026. The synthetic
+fixtures `geode_file_feet` and `segy_file` in `tests/conftest.py` reproduce
+what those files actually contain:
+
+- SEG-2: `INSTRUMENT GEOMETRICS SEISMODULES CONTROLLER 0000`, file-header
+  `UNITS FEET`, per-trace `RECEIVER_LOCATION` / `SOURCE_LOCATION` as scalar
+  distances along the line, `DELAY` (0 or 0.001), `CHANNEL_NUMBER`,
+  `SAMPLE_INTERVAL 0.00025`, `SHOT_SEQUENCE_NUMBER`, `STACK`, `FIXED_GAIN`,
+  `DESCALING_FACTOR`, and a `NOTE` block with `BASE_INTERVAL`,
+  `SHOT_INCREMENT`, `PHONE_INCREMENT`.
+- SEG-Y: rev 0, big-endian, IBM float, textual header naming
+  `GEOMETRICS SEISMODULE CONTROLLER`, binary-header measurement system 2
+  (feet), `source_x` / `group_x` as along-line distances with scalar 1,
+  `field_record` = shot number, two-digit year and day-of-year in the trace
+  headers.
+
+Those records were not added here because they are not a coherent survey
+and have known quality problems. A single clean shot record of each format
+(65 KB SEG-2, 108 KB SEG-Y) is still wanted.
 
 ## Contributing a sample
 
@@ -28,8 +52,9 @@ publishing — this repository is public.
 
 | Priority | File | Why |
 |---|---|---|
-| **High** | Geode SEG-2 with geometry entered | Confirms header convention |
-| **High** | Geode SEG-2 with geometry *not* entered | The common teaching-lab case |
+| **High** | One clean Geode SEG-2 shot record | Real-file regression for the header layout above |
+| **High** | One clean SeisModule SEG-Y shot record | Same, for the SEG-Y path |
+| Medium | Geode SEG-2 with geometry *not* entered | Confirms the fallback path on a real file |
 | Medium | G-857 dump from the real instrument | Confirms firmware header wording |
 | Medium | ATOM-1C SEG-2 export | Confirms the GPS header key |
 | Medium | Trimble GNSS point export | Adds a second positions profile |

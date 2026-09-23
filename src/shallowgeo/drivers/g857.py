@@ -143,6 +143,10 @@ def _header_columns(lines: list[str]) -> list[str] | None:
 def _is_g857(path: Path) -> bool:
     lines = _sniff_text(path, 60)
     text = "".join(lines).upper()
+    if "\x00" in text:
+        # A G-857 dump is plain ASCII. NUL bytes mean a binary file -- a SEG-2
+        # record's header strings decode to numeric-looking tokens otherwise.
+        return False
     if "G-857" in text or "G857" in text:
         return True
     if "CG-5" in text:  # a CG-5 dump is also plain numeric ASCII

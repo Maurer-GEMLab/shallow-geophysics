@@ -23,7 +23,9 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install
-        run: pip install -e ".[seismic,test]"
+        # masw pulls disba/numba so the surface-wave inversion tests run;
+        # they skip cleanly if it is ever dropped from the matrix.
+        run: pip install -e ".[seismic,masw,test]"
 
       - name: Test
         run: pytest -q

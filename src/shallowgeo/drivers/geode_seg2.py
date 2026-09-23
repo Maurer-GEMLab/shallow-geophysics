@@ -1,16 +1,23 @@
-"""Geometrics Geode / Geometrics-written SEG-2 (refraction, active MASW).
+"""Geometrics Geode / SeisModule SEG-2 (refraction, active MASW).
 
 The Geode records SEG-2 with ``RECEIVER_LOCATION`` and ``SOURCE_LOCATION``
-written as a *scalar distance along the spread*, not a coordinate triple, and
-only if the operator entered geometry in the field software. In practice a
-large fraction of teaching-lab files carry all-zero locations, so this driver
-treats file geometry as a hint and lets the caller override it::
+written as a *scalar distance along the spread*, not a coordinate triple, in
+the length unit declared by the file-header ``UNITS`` key -- and only if the
+operator entered geometry in the field software. Files with all-zero
+locations do occur, so this driver treats file geometry as a hint and lets
+the caller override it::
 
     read("LINE1.DAT", spacing=2.0, source_offset=-1.0)
 
-The along-line distances are placed in a real CRS. With no ``spatial_ref``
-given the driver builds a local metric grid, so downstream code can assume a
-CRS always exists without pretending to know where on Earth the line was.
+Caller-supplied geometry is always in metres. Header geometry is converted
+from the file's unit (``UNITS FEET`` is common on North American Geodes) and
+the conversion is recorded in provenance.
+
+Confirmed against SeisModule Controller exports, September 2025 to September
+2026: ``UNITS``, per-trace ``DELAY``, ``CHANNEL_NUMBER``, ``SAMPLE_INTERVAL``,
+``DESCALING_FACTOR``, ``FIXED_GAIN``, ``STACK`` and a ``NOTE`` block carrying
+``BASE_INTERVAL``/``SHOT_INCREMENT``/``PHONE_INCREMENT`` are all present. The
+``INSTRUMENT`` string is ``GEOMETRICS SEISMODULES CONTROLLER``, not "GEODE".
 """
 
 from __future__ import annotations
@@ -18,12 +25,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
-from ..core.crs import SpatialRef, local_grid
-from ..core.geometry import Geometry
+from ..core.crs import SpatialRef
 from ..core.survey import SeismicSurvey
 from ._seg2 import SEG2File, header_float, looks_like_seg2, read_seg2
+from ._spread import (
+    build_shot_survey,
+    length_unit_factor,
+    resolve_spread,
+    stack_traces,
+    uniform_delay,
+)
 from .base import Driver, _sniff
 
 #: Written by Geometrics field software into the SEG-2 file header.
@@ -64,14 +76,14 @@ def _positions_from_headers(seg2: SEG2File, key: str) -> np.ndarray:
     return out
 
 
-def _is_degenerate(positions: np.ndarray) -> bool:
-    """True when headers carry no usable geometry.
-
-    All-NaN, or every receiver at the same place -- both mean the operator did
-    not enter the spread, and both must fall back to caller-supplied spacing.
-    """
-    finite = positions[np.isfinite(positions)]
-    return finite.size == 0 or np.allclose(finite, finite[0])
+def _parse_note(note: str | None) -> dict[str, str]:
+    """The Geode ``NOTE`` block is ``KEY value`` pairs separated by newlines."""
+    out: dict[str, str] = {}
+    for line in (note or "").replace("\\n", "\n").splitlines():
+        key, _, value = line.strip().partition(" ")
+        if key:
+            out[key.upper()] = value.strip()
+    return out
 
 
 def read_geode(
@@ -83,107 +95,76 @@ def read_geode(
     azimuth: float = 90.0,
     sample_interval: float | None = None,
     elevations: np.ndarray | None = None,
+    units: str | None = None,
 ) -> SeismicSurvey:
     """Read a Geometrics SEG-2 shot record.
 
     Parameters
     ----------
     spacing
-        Geophone spacing in metres. Overrides header geometry, and is
+        Geophone spacing in **metres**. Overrides header geometry, and is
         *required* when the headers carry none.
     source_offset
-        Shot position as a distance along the line from the first geophone.
+        Shot position in **metres** along the line from the first geophone.
         Negative for the usual off-end shot.
     spatial_ref
         Where the line sits. Defaults to a local metric grid with the first
         geophone at the origin.
     elevations
-        Per-receiver elevation, positive up. Flat spread assumed if omitted.
-        Refraction inversion is sensitive to this; supply it whenever you have
-        levelled the line.
+        Per-receiver elevation in metres, positive up. Flat spread assumed if
+        omitted. Refraction inversion is sensitive to this; supply it whenever
+        you have levelled the line.
+    units
+        Override the file-header ``UNITS`` (``"feet"`` or ``"meters"``) when
+        the operator set it wrong in the field software.
     """
     path = Path(path)
     seg2 = read_seg2(path)
-    n = seg2.n_traces
 
     dt = sample_interval or _sample_interval(seg2)
-    sref = spatial_ref or local_grid(0.0, 0.0)
+    header_units = seg2.header.get("UNITS")
+    unit_name = units or header_units
+    factor = length_unit_factor(unit_name, default="m")
 
-    rec_pos = _positions_from_headers(seg2, "RECEIVER_LOCATION")
-    if spacing is not None:
-        rec_pos = np.arange(n, dtype=float) * spacing
-    elif _is_degenerate(rec_pos):
-        raise ValueError(
-            f"{path.name}: RECEIVER_LOCATION headers are empty or constant, so "
-            "the spread geometry is unknown. Pass spacing=<metres>."
-        )
-    else:
-        rec_pos = pd.Series(rec_pos).interpolate(limit_direction="both").to_numpy()
-
-    if source_offset is not None:
-        src_pos = float(source_offset)
-    else:
-        header_src = _positions_from_headers(seg2, "SOURCE_LOCATION")
-        finite = header_src[np.isfinite(header_src)]
-        if finite.size == 0:
-            raise ValueError(
-                f"{path.name}: no SOURCE_LOCATION in headers. "
-                "Pass source_offset=<metres along line>."
-            )
-        src_pos = float(finite[0])
-
-    if elevations is None:
-        rec_z = np.zeros(n)
-    else:
-        rec_z = np.asarray(elevations, dtype=float)
-        if rec_z.size != n:
-            raise ValueError(
-                f"elevations has {rec_z.size} entries but the file has {n} traces"
-            )
-
-    theta = np.deg2rad(azimuth)
-    ux, uy = np.sin(theta), np.cos(theta)
-    # Shot elevation interpolated onto the spread rather than assumed zero, so
-    # an off-end shot on sloping ground does not sit underground.
-    src_z = float(np.interp(src_pos, rec_pos, rec_z))
-
-    geometry = Geometry(
-        ids=[*range(1, n + 1), "S1"],
-        x=[*(rec_pos * ux), src_pos * ux],
-        y=[*(rec_pos * uy), src_pos * uy],
-        z=[*rec_z, src_z],
-        roles=[*["receiver"] * n, "source"],
-        spatial_ref=sref,
+    receivers_m, source_m, geometry_from = resolve_spread(
+        _positions_from_headers(seg2, "RECEIVER_LOCATION"),
+        _positions_from_headers(seg2, "SOURCE_LOCATION"),
+        unit_factor=factor,
+        spacing=spacing,
+        source_offset=source_offset,
+        name=path.name,
+    )
+    delay = uniform_delay(
+        [header_float(t.header, "DELAY") for t in seg2.traces], name=path.name
     )
 
-    trace_map = pd.DataFrame(
-        {
-            "receiver_id": range(1, n + 1),
-            "source_id": "S1",
-            "channel": [
-                int(header_float(t.header, "CHANNEL_NUMBER", i + 1))
-                for i, t in enumerate(seg2.traces)
-            ],
-            "delay": [header_float(t.header, "DELAY", 0.0) for t in seg2.traces],
-        }
-    )
-
-    n_samples = max(t.data.size for t in seg2.traces)
-    data = np.zeros((n, n_samples))
-    for i, tr in enumerate(seg2.traces):
-        data[i, : tr.data.size] = tr.data
-
-    survey = SeismicSurvey(
-        data=data,
+    tr0 = seg2.traces[0].header
+    survey = build_shot_survey(
+        data=stack_traces([t.data for t in seg2.traces]),
         sample_interval=dt,
-        geometry=geometry,
-        trace_map=trace_map,
+        delay=delay,
+        receivers_m=receivers_m,
+        source_m=source_m,
+        channels=[
+            int(header_float(t.header, "CHANNEL_NUMBER", i + 1))
+            for i, t in enumerate(seg2.traces)
+        ],
+        elevations=elevations,
+        azimuth=azimuth,
+        spatial_ref=spatial_ref,
         metadata={
             "instrument": "Geometrics Geode",
             "format": "SEG-2",
             "seg2_file_header": seg2.header,
             "acquisition_date": seg2.header.get("ACQUISITION_DATE"),
             "acquisition_time": seg2.header.get("ACQUISITION_TIME"),
+            "header_units": header_units,
+            "shot_sequence_number": tr0.get("SHOT_SEQUENCE_NUMBER"),
+            "stack": header_float(tr0, "STACK"),
+            "fixed_gain_db": header_float(tr0, "FIXED_GAIN"),
+            "descaling_factor": header_float(tr0, "DESCALING_FACTOR"),
+            "amplitude_units": "counts",
+            "note": _parse_note(seg2.header.get("NOTE")),
             "source_file": str(path),
         },
     )
@@ -193,7 +174,10 @@ def read_geode(
         path=str(path),
         spacing=spacing,
         source_offset=source_offset,
-        geometry_from="arguments" if spacing is not None else "headers",
+        geometry_from=geometry_from,
+        header_units=unit_name,
+        unit_factor=factor,
+        delay=delay,
     )
     return survey
 
@@ -208,7 +192,7 @@ driver = Driver(
     vendor="Geometrics",
     instrument="Geode",
     notes=(
-        "Header geometry is frequently absent; pass spacing= and "
-        "source_offset= when RECEIVER_LOCATION is unset."
+        "Header geometry is converted from the file's UNITS to metres. Pass "
+        "spacing= and source_offset= (metres) when RECEIVER_LOCATION is unset."
     ),
 )

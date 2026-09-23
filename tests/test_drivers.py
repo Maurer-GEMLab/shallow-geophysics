@@ -8,6 +8,7 @@ import shallowgeo as sg
 from shallowgeo.core import SpatialRef
 from shallowgeo.drivers import DriverError, identify, read, registry
 from shallowgeo.drivers._seg2 import read_seg2
+from shallowgeo.drivers._segy import ibm_to_float, looks_like_segy, read_segy
 from shallowgeo.drivers.atom_seg2 import read_atom_array
 from shallowgeo.drivers.g857 import inspect_g857
 
@@ -83,6 +84,143 @@ class TestGeode:
         with pytest.raises(ValueError, match="elevations has"):
             read(geode_file, spacing=1.0, source_offset=0.0,
                  elevations=np.zeros(3))
+
+
+class TestGeodeUnitsAndDelay:
+    """Against the header layout of real SeisModule Controller exports."""
+
+    def test_identified_by_seismodule_marker(self, geode_file_feet):
+        assert identify(geode_file_feet)[0].name == "geode-seg2"
+
+    def test_feet_are_converted_to_metres(self, geode_file_feet):
+        s = read(geode_file_feet)
+        np.testing.assert_allclose(s.geometry.receivers["x"].to_numpy(),
+                                   np.arange(24) * 4.0 * 0.3048)
+        assert s.geometry.sources["x"].iloc[0] == pytest.approx(-12.0 * 0.3048)
+        assert s.offsets()[0] == pytest.approx(12.0 * 0.3048)
+
+    def test_conversion_is_recorded(self, geode_file_feet):
+        s = read(geode_file_feet)
+        params = s.provenance[0].parameters
+        assert params["header_units"] == "FEET"
+        assert params["unit_factor"] == pytest.approx(0.3048)
+        assert params["geometry_from"] == "headers"
+        assert s.metadata["header_units"] == "FEET"
+
+    def test_units_override(self, geode_file_feet):
+        s = read(geode_file_feet, units="meters")
+        assert s.geometry.receivers["x"].iloc[1] == pytest.approx(4.0)
+
+    def test_unknown_units_raise(self, geode_file_feet):
+        with pytest.raises(ValueError, match="unrecognised length unit"):
+            read(geode_file_feet, units="cubits")
+
+    def test_arguments_are_metres_regardless_of_header(self, geode_file_feet):
+        s = read(geode_file_feet, spacing=2.0, source_offset=-1.0)
+        assert s.geometry.receivers["x"].iloc[1] == pytest.approx(2.0)
+        assert s.provenance[0].parameters["geometry_from"] == "arguments"
+
+    def test_mixed_origin_is_labelled(self, geode_file_feet):
+        s = read(geode_file_feet, source_offset=-1.0)
+        assert s.provenance[0].parameters["geometry_from"] == "mixed"
+
+    def test_delay_lands_on_time_axis(self, geode_file_feet):
+        s = read(geode_file_feet)
+        assert s.delay == pytest.approx(0.001)
+        assert s.times()[0] == pytest.approx(0.001)
+        assert (s.trace_map["delay"] == 0.001).all()
+
+    def test_acquisition_metadata(self, geode_file_feet):
+        s = read(geode_file_feet)
+        assert s.metadata["shot_sequence_number"] == "26"
+        assert s.metadata["stack"] == 8
+        assert s.metadata["fixed_gain_db"] == 36
+        assert s.metadata["descaling_factor"] == pytest.approx(4.2704e-5)
+        assert s.metadata["note"]["BASE_INTERVAL"] == "4.00"
+
+    def test_fixture_without_units_defaults_to_metres(self, geode_file):
+        s = read(geode_file)
+        assert s.provenance[0].parameters["unit_factor"] == 1.0
+        assert s.metadata["header_units"] is None
+
+
+class TestSEGYParser:
+    def test_ibm_float_known_values(self):
+        raw = np.array([0x41100000, 0xC2760000, 0x00000000, 0x40800000], dtype=np.uint32)
+        np.testing.assert_allclose(ibm_to_float(raw), [1.0, -118.0, 0.0, 0.5])
+
+    def test_ibm_round_trip_through_writer(self, segy_file):
+        path, data = segy_file
+        segy = read_segy(path)
+        np.testing.assert_allclose(segy.traces[0].data, data[0], rtol=1e-6)
+
+    def test_headers(self, segy_file):
+        segy = read_segy(segy_file[0])
+        assert segy.n_traces == 24
+        assert segy.binary_header["format_code"] == 1
+        assert segy.measurement_unit == "ft"
+        assert segy.sample_interval == pytest.approx(0.000125)
+        assert segy.traces[0].header["field_record"] == 4001
+        assert segy.traces[5].header["group_x"] == 20
+        assert "GEOMETRICS SEISMODULE" in segy.text_header
+
+    def test_little_endian_ieee(self, segy_file_ieee_metric):
+        path, data = segy_file_ieee_metric
+        segy = read_segy(path)
+        assert segy.endian == "<"
+        assert segy.measurement_unit == "m"
+        np.testing.assert_allclose(segy.traces[2].data, data[2], rtol=1e-6)
+
+    def test_sniffer_rejects_junk(self, tmp_path):
+        p = tmp_path / "junk.sgy"
+        p.write_bytes(b"\x00" * 4000)
+        assert not looks_like_segy(p.read_bytes())
+        assert identify(p) == []
+
+
+class TestGeodeSEGY:
+    def test_identified(self, segy_file):
+        assert identify(segy_file[0])[0].name == "geode-segy"
+
+    def test_geometry_in_metres(self, segy_file):
+        s = read(segy_file[0])
+        assert s.n_traces == 24 and s.n_samples == 256
+        np.testing.assert_allclose(s.geometry.receivers["x"].to_numpy(),
+                                   np.arange(24) * 4.0 * 0.3048)
+        assert s.geometry.sources["x"].iloc[0] == pytest.approx(112.0 * 0.3048)
+        assert s.offsets()[-1] == pytest.approx(20.0 * 0.3048)
+
+    def test_provenance_and_metadata(self, segy_file):
+        s = read(segy_file[0])
+        params = s.provenance[0].parameters
+        assert params["driver"] == "geode-segy"
+        assert params["header_units"] == "ft"
+        assert params["units_assumed"] is False
+        assert s.metadata["format"] == "SEG-Y"
+        assert s.metadata["field_record"] == 4001
+        assert s.sample_interval == pytest.approx(0.000125)
+
+    def test_start_time_from_trace_header(self, segy_file):
+        s = read(segy_file[0])
+        assert s.start_time == pd.Timestamp("2026-09-11 13:19:34")
+
+    def test_unbranded_metric_file_is_claimed_by_extension(self, segy_file_ieee_metric):
+        path, _ = segy_file_ieee_metric
+        assert identify(path)[0].name == "geode-segy"
+        s = read(path)
+        assert s.geometry.receivers["x"].iloc[1] == pytest.approx(2.0)
+        assert s.geometry.sources["x"].iloc[0] == pytest.approx(-4.0)
+        assert s.provenance[0].parameters["unit_factor"] == 1.0
+
+    def test_missing_geometry_needs_spacing(self, segy_file_no_geometry):
+        with pytest.raises(ValueError, match="Pass spacing"):
+            read(segy_file_no_geometry)
+        s = read(segy_file_no_geometry, spacing=1.0, source_offset=-2.0)
+        assert s.geometry.receivers["x"].iloc[5] == pytest.approx(5.0)
+
+    def test_registry_lists_five_drivers(self):
+        names = {d.name for d in registry.all()}
+        assert {"geode-seg2", "geode-segy", "atom-seg2", "cg5", "g857"} <= names
 
 
 class TestAtom:
@@ -320,3 +458,55 @@ class TestTopLevelAPI:
         out = capsys.readouterr().out
         assert "Registered drivers:" in out
         assert "geode-seg2" in out
+
+
+class TestGeodeSEGYMultiRecord:
+    """A SEG-Y holding several field records is one spread with several shots.
+
+    Concatenating the traces instead would attach every trace to the first
+    record's source, which silently corrupts every offset in the second
+    record and doubles the apparent number of geophones.
+    """
+
+    def test_records_become_sources_not_extra_receivers(self, segy_file_two_records):
+        s = read(segy_file_two_records[0])
+        assert s.n_traces == 48
+        assert len(s.geometry.receivers) == 24
+        assert s.geometry.sources["id"].tolist() == ["S1", "S2"]
+        assert s.metadata["field_records"] == [4017, 4018]
+
+    def test_second_record_offsets_use_its_own_source(self, segy_file_two_records):
+        s = read(segy_file_two_records[0])
+        off = s.offsets()
+        # 112 ft and 92 ft sources, geophones from 0 ft at 4 ft spacing.
+        assert off[0] == pytest.approx(112 * 0.3048)
+        assert off[24] == pytest.approx(92 * 0.3048)
+
+    def test_gather_recovers_one_record(self, segy_file_two_records):
+        path, data = segy_file_two_records
+        s = read(path)
+        g = s.gather("S2")
+        assert g.n_traces == 24
+        np.testing.assert_allclose(g.data, data[24:], rtol=1e-6)
+        assert g.offsets()[0] == pytest.approx(92 * 0.3048)
+
+    def test_trace_map_labels_the_record(self, segy_file_two_records):
+        s = read(segy_file_two_records[0])
+        assert s.trace_map["record"].unique().tolist() == [4017, 4018]
+
+    def test_source_offset_override_is_refused(self, segy_file_two_records):
+        with pytest.raises(ValueError, match="field records"):
+            read(segy_file_two_records[0], source_offset=0.0)
+
+    def test_mismatched_spreads_are_refused(self, tmp_path):
+        from tests.segy_writer import write_segy
+
+        a, b = tmp_path / "_a.sgy", tmp_path / "_b.sgy"
+        write_segy(a, np.zeros((6, 32)), 0.0005,
+                   group_x=[2.0 * i for i in range(6)], source_x=10.0, field_record=1)
+        write_segy(b, np.zeros((6, 32)), 0.0005,
+                   group_x=[9.0 * i for i in range(6)], source_x=10.0, field_record=2)
+        path = tmp_path / "mixed.sgy"
+        path.write_bytes(a.read_bytes() + b.read_bytes()[3600:])
+        with pytest.raises(ValueError, match="different receiver spread"):
+            read(path)

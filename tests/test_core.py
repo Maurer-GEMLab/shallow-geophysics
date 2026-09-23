@@ -116,6 +116,21 @@ class TestSeismicSurvey:
         s = self._survey()
         assert s.sample_rate == 1000.0
         assert s.duration == pytest.approx(0.1)
+        assert s.delay == 0.0
+        assert s.times()[0] == 0.0
+
+    def test_delay_shifts_time_axis(self):
+        s = self._survey()
+        s.delay = 0.005
+        assert s.times()[0] == pytest.approx(0.005)
+        assert s.times()[-1] == pytest.approx(0.005 + 99 * 0.001)
+        # Record length is unchanged by where it starts.
+        assert s.duration == pytest.approx(0.1)
+
+    def test_gather_keeps_delay(self):
+        s = self._survey()
+        s.delay = 0.002
+        assert s.gather("S1").delay == 0.002
 
     def test_gather_records_provenance(self):
         g = self._survey().gather("S1")

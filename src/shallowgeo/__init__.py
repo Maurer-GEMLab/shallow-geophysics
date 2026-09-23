@@ -8,11 +8,17 @@ Read any supported instrument's export into one common survey object::
     gravity    = sg.read("GRAV.TXT")
     print(sg.drivers.registry.all())
 
+Then interpret it::
+
+    picks = sg.refraction.pick_first_breaks(refraction)
+    model = sg.refraction.fit_layers(picks["offset"], picks["time"], n_layers=2)
+    image = sg.surfacewave.dispersion_image(refraction)
+
 Scope of this release: seismic refraction, MASW and passive surface wave,
 ground gravity, and ground magnetics.
 """
 
-from . import core, drivers, positions
+from . import core, drivers, positions, refraction, surfacewave
 from .core import (
     Geometry,
     PointSurvey,
@@ -28,7 +34,8 @@ from .positions import PositionTable, read_positions
 __version__ = "0.0.1.dev0"
 
 __all__ = [
-    "core", "drivers", "positions", "read", "identify",
+    "core", "drivers", "positions", "refraction", "surfacewave",
+    "read", "identify",
     "read_positions", "PositionTable",
     "Geometry", "SpatialRef", "local_grid", "Provenance",
     "Survey", "SeismicSurvey", "PointSurvey",
@@ -51,6 +58,7 @@ def print_diagnostics() -> None:
     print("\nOptional stack:")
     for name, extra in [
         ("numpy", None), ("pandas", None), ("pyproj", None),
+        ("scipy", None), ("matplotlib", None),
         ("obspy", "seismic"), ("discretize", "model"), ("xarray", "model"),
         ("simpeg", "invert"), ("pygimli", "invert"),
         ("disba", "masw"), ("evodcinv", "masw"),

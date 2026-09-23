@@ -68,6 +68,13 @@ class SeismicSurvey(Survey):
         ``source_id`` is required for active-source data and absent for
         passive records. Extra columns (``channel``, ``record``, ``delay``)
         pass through untouched.
+    delay
+        Time of the first sample relative to the trigger, in seconds. SEG-2
+        ``DELAY`` and SEG-Y ``delay recording time`` both carry this, and a
+        Geode is routinely run with a non-zero value. Ignoring it shifts
+        every first-break pick by the delay, so it is a first-class attribute
+        that :meth:`times` honours rather than a trace-map column that
+        downstream code has to remember to look for.
     """
 
     method = "seismic"
@@ -79,6 +86,7 @@ class SeismicSurvey(Survey):
         geometry: Geometry,
         trace_map: pd.DataFrame,
         *,
+        delay: float = 0.0,
         start_time=None,
         metadata: dict[str, Any] | None = None,
         provenance: Provenance | None = None,
@@ -96,6 +104,7 @@ class SeismicSurvey(Survey):
             raise ValueError(f"sample_interval must be positive, got {sample_interval}")
         self.data = data
         self.sample_interval = float(sample_interval)
+        self.delay = float(delay)
         self.trace_map = trace_map.reset_index(drop=True)
         self.start_time = start_time
 
@@ -121,7 +130,12 @@ class SeismicSurvey(Survey):
         return "source_id" not in self.trace_map.columns
 
     def times(self) -> np.ndarray:
-        return np.arange(self.n_samples) * self.sample_interval
+        """Sample times in seconds relative to the trigger.
+
+        Starts at :attr:`delay`, not at zero. A pick made against this axis
+        is directly comparable with a modelled travel time.
+        """
+        return self.delay + np.arange(self.n_samples) * self.sample_interval
 
     def offsets(self) -> np.ndarray:
         """Source-receiver offset per trace, in the geometry's units.
@@ -148,6 +162,7 @@ class SeismicSurvey(Survey):
             self.sample_interval,
             self.geometry,
             self.trace_map.loc[mask],
+            delay=self.delay,
             start_time=self.start_time,
             metadata=dict(self.metadata),
             provenance=self.provenance.copy(),
@@ -173,7 +188,9 @@ class SeismicSurvey(Survey):
         for i, row in self.trace_map.iterrows():
             header = {"delta": self.sample_interval, "channel": str(row.get("channel", ""))}
             if self.start_time is not None:
-                header["starttime"] = UTCDateTime(self.start_time)
+                # ObsPy has no separate delay field: the first sample simply
+                # sits `delay` seconds after the trigger time.
+                header["starttime"] = UTCDateTime(self.start_time) + self.delay
             tr = Trace(data=np.ascontiguousarray(self.data[i]), header=header)
             tr.stats.shallowgeo = row.to_dict()
             traces.append(tr)

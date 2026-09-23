@@ -24,6 +24,7 @@ dependencies = [
     "numpy>=1.26",
     "pandas>=2.0",
     "pyproj>=3.6",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -31,13 +32,15 @@ seismic = ["obspy>=1.4"]
 masw = ["disba>=0.6", "evodcinv>=2.2"]
 model = ["discretize>=0.10", "xarray>=2024.1", "netCDF4>=1.6"]
 invert = ["simpeg>=0.22", "pygimli>=1.5"]
-test = ["pytest>=7", "pytest-cov"]
+test = ["pytest>=7", "pytest-cov", "matplotlib>=3.8"]
 
 # --- Driver registry -------------------------------------------------------
 # Third-party packages add readers by advertising this same entry-point group.
 [project.entry-points."shallowgeo.drivers"]
 geode-seg2 = "shallowgeo.drivers.geode_seg2:driver"
+geode-segy = "shallowgeo.drivers.geode_segy:driver"
 atom-seg2  = "shallowgeo.drivers.atom_seg2:driver"
+atom-atm   = "shallowgeo.drivers.atom_atm:driver"
 cg5        = "shallowgeo.drivers.cg5:driver"
 g857       = "shallowgeo.drivers.g857:driver"
 
