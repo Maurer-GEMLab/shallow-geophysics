@@ -110,9 +110,12 @@ checks `provenance.applied()` and refuses to double-apply.
 
 ## Milestone 5 — method wrappers (Layer 2)
 
-- [ ] Refraction → pyGIMLi `TravelTimeManager`. Design notes and data
-      requirements are in `shallowgeo.refraction.tomography`; needs dense
-      multi-shot coverage that the current teaching lines do not have.
+- [x] Refraction tomography in `shallowgeo.refraction.tomography`:
+      shortest-path rays and regularised Gauss-Newton in NumPy/SciPy, with
+      pyGIMLi `TravelTimeManager` as a second backend on the same grid
+      (they agree to ~6 % on the 2026-09-25 line). Still to do: project
+      onto the canonical grid (Milestone 4) and topography from surveyed
+      elevations in the notebooks.
 - [ ] Gravity, magnetics → SimPEG `potential_fields`
 - [ ] Surface wave → `disba` / `evodcinv` 1D, projected onto the canonical grid
 

@@ -107,6 +107,8 @@ def pick_first_breaks(
     threshold: float = 4.0,
     min_time: float | None = None,
     max_time: float | None = None,
+    guide: np.ndarray | None = None,
+    guide_window: float = 0.004,
 ) -> pd.DataFrame:
     """Pick the first arrival on every trace.
 
@@ -127,6 +129,14 @@ def pick_first_breaks(
         ``min_time`` to skip a trigger spike at time zero. For ``"aic"`` the
         default upper limit is each trace's own largest amplitude -- the
         first break is never later than that.
+    guide, guide_window
+        Expected first-break time for each trace (seconds, NaN for none),
+        and the half-width of the window searched around it. With a guide
+        the picker only looks within ``guide +- guide_window``, which is how
+        picks are refined from a model: invert the clean picks, predict every
+        trace, and re-pick near the prediction. The guide only chooses
+        *where to look*; the pick itself is still the AIC break in that
+        window, so it can disagree with the model.
 
     Returns
     -------
@@ -146,6 +156,12 @@ def pick_first_breaks(
     if hi - lo < 2 * w:
         raise ValueError("search window shorter than two energy windows")
 
+    if guide is not None:
+        guide = np.asarray(guide, dtype=float)
+        if guide.shape != (data.shape[0],):
+            raise ValueError(f"guide needs one time per trace ({data.shape[0]})")
+        half = max(int(round(guide_window / dt)), 2)
+
     picks = np.empty(data.shape[0], dtype=int)
     quality = np.empty(data.shape[0])
     for i, tr in enumerate(data):
@@ -153,18 +169,29 @@ def pick_first_breaks(
         if not np.any(seg):
             picks[i], quality[i] = -1, 0.0
             continue
+        # The part of the segment searched: all of it, or a window around
+        # the guide. ``a`` is where that window starts within ``seg``.
+        a, b = 0, seg.size
+        if guide is not None and np.isfinite(guide[i]):
+            centre = int(np.searchsorted(times, guide[i])) - lo
+            a = min(max(centre - half, 0), seg.size - 4)
+            b = max(min(centre + half, seg.size), a + 4)
         if method == "aic":
-            stop = seg.size if max_time is not None else int(np.argmax(np.abs(seg))) + 1
-            stop = max(stop, 2 * w)
-            cf = _aic(seg[:stop])
-            j = int(np.nanargmin(cf)) + 1  # break is *after* sample k
+            if guide is not None and np.isfinite(guide[i]):
+                cf = _aic(seg[a:b])
+            else:
+                stop = seg.size if max_time is not None else int(np.argmax(np.abs(seg))) + 1
+                stop = max(stop, 2 * w)
+                cf = _aic(seg[:stop])
+            j = a + int(np.nanargmin(cf)) + 1  # break is *after* sample k
         elif method == "mer":
             cf = _mer(seg, w)
-            j = int(np.nanargmax(cf))
+            j = a + int(np.nanargmax(cf[a:b])) if np.isfinite(cf[a:b]).any() \
+                else int(np.nanargmax(cf))
         elif method == "sta_lta":
             cf = _sta_lta(seg, w, lw)
-            above = np.flatnonzero(cf > threshold)
-            j = int(above[0]) if above.size else int(np.nanargmax(cf))
+            above = a + np.flatnonzero(cf[a:b] > threshold)
+            j = int(above[0]) if above.size else a + int(np.nanargmax(cf[a:b]))
         else:
             raise ValueError(f"unknown picking method {method!r}")
         picks[i] = j + lo

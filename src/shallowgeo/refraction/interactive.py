@@ -193,6 +193,65 @@ class PickingSession:
             self.picks[lab] = fresh
         return self
 
+    def guided_pick(self, predict, *, window: float = 0.004,
+                    label: str | None = None, keep_edits: bool = True) -> PickingSession:
+        """Re-pick every trace near a predicted first-break time.
+
+        ``predict`` is anything with a ``predict(source_x, receiver_x)``
+        method returning seconds -- a
+        :class:`~shallowgeo.refraction.tomography.TomographyResult` or a
+        :class:`~shallowgeo.refraction.layers.LayeredRefractionModel` -- or a
+        plain function of the same two arrays. The AIC picker then searches
+        only ``prediction +- window`` on each trace, which rescues the traces
+        where the first pass locked onto a later, stronger arrival.
+
+        The model only says where to look. Each pick is still the break the
+        picker finds in the trace, with its own quality, so a model that is
+        wrong somewhere shows up as picks that disagree with it there.
+        Hand-edited traces are left alone unless ``keep_edits=False``.
+        """
+        fn = predict.predict if hasattr(predict, "predict") else predict
+        for lab in self._resolve(label):
+            survey = self.shots[lab]
+            rec_x = self.receiver_x(lab)
+            src_x = float(survey.geometry.table.set_index(["role", "id"]).loc[
+                ("source", survey.trace_map["source_id"].iloc[0]), "x"])
+            try:
+                guide = np.asarray(fn(np.full(rec_x.size, src_x), rec_x), dtype=float)
+            except TypeError:  # a layered model predicts from offset alone
+                guide = np.asarray(fn(np.abs(rec_x - src_x)), dtype=float)
+            fresh = pick_first_breaks(
+                survey,
+                method=self.settings["method"],
+                min_time=self.settings["min_time"],
+                max_time=self.settings["max_time"],
+                guide=guide,
+                guide_window=window,
+            )
+            fresh["use"] = ((fresh["quality"] >= self.settings["min_quality"])
+                            & (fresh["offset"] > 0) & fresh["time"].notna())
+            fresh["edited"] = False
+            old = self.picks.get(lab)
+            if keep_edits and old is not None and old["edited"].any():
+                keep = old["edited"].to_numpy()
+                fresh.loc[keep, ["sample", "time", "quality", "use", "edited"]] = (
+                    old.loc[keep, ["sample", "time", "quality", "use", "edited"]].to_numpy()
+                )
+            self.picks[lab] = fresh
+        return self
+
+    def exclude(self, rows: pd.DataFrame) -> PickingSession:
+        """Mark the picks in ``rows`` (with ``shot`` and ``channel``) as not used.
+
+        Takes the output of ``TomographyResult.outliers()`` directly. The
+        picks stay in the session and can be re-admitted with
+        :meth:`set_use`.
+        """
+        for shot, channel in zip(rows["shot"].astype(str), rows["channel"]):
+            if shot in self.shots:
+                self.set_use(shot, channel, False)
+        return self
+
     def _row(self, label: str, channel) -> int:
         picks = self.picks[label]
         hit = np.flatnonzero(picks["channel"].to_numpy() == channel)
@@ -370,8 +429,14 @@ class PickingSession:
         ax.legend(loc="lower right", fontsize=8)
         return ax
 
-    def plot_trace(self, label: str, channel, *, ax=None, zoom: float = 0.03):
-        """One trace around its pick, at the scale a first break is judged on."""
+    def plot_trace(self, label: str, channel, *, ax=None, zoom: float = 0.03,
+                   centre: float | None = None):
+        """One trace around its pick, at the scale a first break is judged on.
+
+        ``centre`` (seconds) overrides what the view is centred on, which
+        matters for a trace with no pick: there is nothing to centre on, and
+        the caller usually knows where the operator is looking.
+        """
         import matplotlib.pyplot as plt
 
         ax = ax or plt.gca()
@@ -381,36 +446,64 @@ class PickingSession:
         t = survey.times() * 1e3
         trace = survey.data[i]
         peak = np.abs(trace).max() or 1.0
-        centre = 1e3 * row["time"] if np.isfinite(row["time"]) else t[len(t) // 4]
+        if centre is not None:
+            centre = 1e3 * centre
+        elif np.isfinite(row["time"]):
+            centre = 1e3 * row["time"]
+        else:
+            centre = t[len(t) // 4]
         ax.plot(t, trace / peak, lw=0.9, color="k")
         ax.axhline(0, color="0.7", lw=0.6)
         if np.isfinite(row["time"]):
-            ax.axvline(centre, color="firebrick" if row["use"] else "0.45",
+            ax.axvline(1e3 * row["time"],
+                       color="firebrick" if row["use"] else "0.45",
                        lw=1.8, ls="-" if row["use"] else "--")
         ax.set_xlim(max(t[0], centre - 1e3 * zoom), min(t[-1], centre + 1e3 * zoom))
         ax.set_xlabel("time (ms)")
         ax.set_ylabel("normalised amplitude")
         ax.grid(alpha=0.3)
         state = "kept" if row["use"] else "dropped"
-        pick_ms = f"{centre:.2f} ms" if np.isfinite(row["time"]) else "no pick"
+        pick_ms = (f"{1e3 * row['time']:.3f} ms" if np.isfinite(row["time"])
+                   else "no pick")
         ax.set_title(f"channel {channel} - offset {row['offset']:.2f} m - "
                      f"{pick_ms} ({state}, quality {row['quality']:.0f})", fontsize=10)
         return ax
 
     def widget(self, *, tmax: float | None = None, gain: float = 1.0,
-               zoom: float = 0.03):
+               span: float | None = None):
         """An ``ipywidgets`` panel for correcting the picks by hand.
 
         Returns the widget; ``display`` it, or leave it as the last line of a
         cell. Edits go straight into this session, so the cells after it use
         the corrected picks as soon as they are re-run.
 
+        Moving a pick is split across three controls, because one slider
+        cannot do both jobs: a slider spanning the whole record has a sample
+        every few pixels and cannot be placed accurately, while a slider fine
+        enough to place cannot reach across the record.
+
+        ``coarse``
+            The whole record. Use it to move a pick that has landed on the
+            wrong arrival entirely.
+        ``fine``
+            A window around the current pick -- by default plus or minus 20%
+            of the pick time, floored at 1 ms and capped at 10 ms, so the
+            travel of the slider is the accuracy you need at that offset.
+            The window re-centres on the pick after every move, so repeated
+            drags walk it anywhere.
+        ``-`` and ``+``
+            One sample earlier or later. The finest move there is; below one
+            sample there is no information.
+
+        ``span`` sets the initial fine half-width in **seconds**, overriding
+        the 20% rule; the dropdown beside the slider changes it afterwards.
+
         Clicking the record or the trace sets a pick when the matplotlib
         backend can report mouse events -- run ``%matplotlib widget`` in the
         notebook first (in Colab also
         ``google.colab.output.enable_custom_widget_manager()``). With the
         default inline backend the plots are static images and the sliders
-        below them do the same job.
+        do the same job.
         """
         import ipywidgets as W
         import matplotlib
@@ -426,6 +519,14 @@ class PickingSession:
 
         style = {"description_width": "110px"}
         wide = W.Layout(width="330px")
+        very_wide = W.Layout(width="560px")
+        # Plus or minus this many milliseconds around the pick; None means the
+        # 20%-of-the-pick-time rule, recomputed for every trace.
+        span_choices = [("auto (20% of the pick)", None), ("1 ms", 1.0),
+                        ("2 ms", 2.0), ("5 ms", 5.0), ("10 ms", 10.0),
+                        ("20 ms", 20.0)]
+        if span is not None and not any(v == 1e3 * span for _, v in span_choices):
+            span_choices.insert(1, (f"{1e3 * span:g} ms", 1e3 * span))
 
         w_shot = W.Dropdown(options=self.labels, description="shot", style=style,
                             layout=W.Layout(width="200px"))
@@ -433,9 +534,22 @@ class PickingSession:
                              style=style, layout=wide)
         w_prev = W.Button(description="<", layout=W.Layout(width="40px"))
         w_next = W.Button(description=">", layout=W.Layout(width="40px"))
-        w_time = W.FloatSlider(description="pick (ms)", min=0.0, max=record_ms,
-                               step=dt_ms, readout_format=".2f",
-                               continuous_update=False, style=style, layout=wide)
+        w_coarse = W.FloatSlider(description="coarse (ms)", min=0.0, max=record_ms,
+                                 step=dt_ms, readout_format=".2f",
+                                 continuous_update=False, style=style,
+                                 layout=very_wide)
+        w_time = W.FloatSlider(description="fine (ms)", min=0.0, max=record_ms,
+                               step=dt_ms, readout_format=".3f",
+                               continuous_update=False, style=style,
+                               layout=very_wide)
+        w_span = W.Dropdown(options=span_choices,
+                            value=None if span is None else 1e3 * span,
+                            description="+/-", style={"description_width": "30px"},
+                            layout=W.Layout(width="190px"))
+        w_earlier = W.Button(description="-", layout=W.Layout(width="40px"),
+                             tooltip="move the pick one sample earlier")
+        w_later = W.Button(description="+", layout=W.Layout(width="40px"),
+                           tooltip="move the pick one sample later")
         w_use = W.Checkbox(description="keep this pick", indent=False,
                            layout=W.Layout(width="150px"))
         w_clear = W.Button(description="no pick here", layout=W.Layout(width="130px"),
@@ -470,9 +584,6 @@ class PickingSession:
         w_gain = W.FloatSlider(description="wiggle gain", min=0.2, max=6.0,
                                value=gain, step=0.2, continuous_update=False,
                                style=style, layout=wide)
-        w_zoom = W.FloatSlider(description="zoom (ms)", min=2.0, max=record_ms / 2,
-                               value=1e3 * zoom, step=1.0, continuous_update=False,
-                               style=style, layout=wide)
         w_tmaxplot = W.FloatSlider(description="record to (ms)", min=10.0,
                                    max=record_ms, value=1e3 * tmax, step=dt_ms,
                                    continuous_update=False, style=style, layout=wide)
@@ -485,9 +596,18 @@ class PickingSession:
             fig.canvas.footer_visible = False
         out = None if clickable else W.Output()
         busy = {"flag": False}
+        window = {"lo": 0.0, "hi": record_ms, "centre": record_ms / 4}
 
         def channels(label):
             return self.picks[label]["channel"].to_numpy()
+
+        def span_ms(centre):
+            """Half-width of the fine slider, in milliseconds."""
+            if w_span.value is not None:
+                return float(w_span.value)
+            if np.isfinite(centre) and centre > 0:
+                return float(np.clip(0.2 * centre, max(1.0, 4 * dt_ms), 10.0))
+            return 10.0
 
         def render():
             label, channel = w_shot.value, w_chan.value
@@ -495,7 +615,14 @@ class PickingSession:
             ax_tr.clear()
             self.plot_shot(label, ax=ax_rec, channel=channel,
                            tmax=1e-3 * w_tmaxplot.value, gain=w_gain.value)
-            self.plot_trace(label, channel, ax=ax_tr, zoom=1e-3 * w_zoom.value)
+            # The trace panel shows half again the fine slider's travel, and
+            # shades the part of it the slider can actually reach, so the two
+            # controls cannot disagree about where you are looking.
+            half = 1.5 * span_ms(window["centre"])
+            self.plot_trace(label, channel, ax=ax_tr, zoom=1e-3 * half,
+                            centre=1e-3 * window["centre"])
+            ax_tr.axvspan(window["lo"], window["hi"], color="#cde2fb", alpha=0.45,
+                          lw=0, zorder=0)
             fig.tight_layout()
             table = self.table()
             w_status.value = (
@@ -524,8 +651,21 @@ class PickingSession:
                 if reset_channel or w_chan.value not in chans:
                     w_chan.value = int(chans.min())
                 row = self.picks[label].iloc[self._row(label, w_chan.value)]
-                w_time.value = (float(1e3 * row["time"]) if np.isfinite(row["time"])
-                                else w_time.value)
+                centre = (float(1e3 * row["time"]) if np.isfinite(row["time"])
+                          else float(w_coarse.value))
+                half = span_ms(centre)
+                lo = max(0.0, centre - half)
+                hi = min(record_ms, centre + half)
+                if hi - lo < 2 * dt_ms:      # degenerate at the record's edge
+                    lo, hi = 0.0, max(2 * dt_ms, hi)
+                # Widen before moving, narrow after: ipywidgets clamps a value
+                # that falls outside the bounds it is given, which would drag
+                # the pick to the edge of the old window.
+                w_time.min, w_time.max = 0.0, record_ms
+                w_time.value = centre
+                w_time.min, w_time.max = lo, hi
+                w_coarse.value = centre
+                window.update(lo=lo, hi=hi, centre=centre)
                 w_use.value = bool(row["use"])
             finally:
                 busy["flag"] = False
@@ -545,9 +685,26 @@ class PickingSession:
         def on_time(change):
             if busy["flag"]:
                 return
-            self.set_pick(w_shot.value, w_chan.value, 1e-3 * change["new"],
-                          use=w_use.value or True)
+            self.set_pick(w_shot.value, w_chan.value, 1e-3 * change["new"])
             refresh()
+
+        def on_coarse(change):
+            if busy["flag"]:
+                return
+            self.set_pick(w_shot.value, w_chan.value, 1e-3 * change["new"])
+            refresh()
+
+        def nudge(n_samples):
+            """Move the pick by whole samples -- the finest move there is."""
+            def handler(_):
+                label, channel = w_shot.value, w_chan.value
+                row = self.picks[label].iloc[self._row(label, channel)]
+                base = (float(row["time"]) if np.isfinite(row["time"])
+                        else 1e-3 * w_time.value)
+                dt = self.shots[label].sample_interval
+                self.set_pick(label, channel, base + n_samples * dt)
+                refresh()
+            return handler
 
         def on_use(change):
             if busy["flag"]:
@@ -609,6 +766,10 @@ class PickingSession:
         w_shot.observe(on_shot, "value")
         w_chan.observe(on_channel, "value")
         w_time.observe(on_time, "value")
+        w_coarse.observe(on_coarse, "value")
+        w_span.observe(lambda _: refresh(), "value")
+        w_earlier.on_click(nudge(-1))
+        w_later.on_click(nudge(+1))
         w_use.observe(on_use, "value")
         w_prev.on_click(step(-1))
         w_next.on_click(step(+1))
@@ -618,19 +779,24 @@ class PickingSession:
         w_repick_all.on_click(repick(False))
         w_keep_shot.on_click(shot_use(True))
         w_drop_shot.on_click(shot_use(False))
-        for control in (w_gain, w_zoom, w_tmaxplot):
+        for control in (w_gain, w_tmaxplot):
             control.observe(lambda _: render(), "value")
         if clickable:
             fig.canvas.mpl_connect("button_press_event", on_click)
 
         hint = ("Click the record to pick that channel, or the right-hand panel to "
-                "refine the selected one." if clickable else
-                "Inline plots cannot report clicks: use the channel and pick sliders. "
-                "For click-picking run <code>%matplotlib widget</code> and re-run "
-                "this cell.")
+                "refine the selected one. <b>coarse</b> reaches the whole record, "
+                "<b>fine</b> covers the shaded band around the pick, "
+                "<b>-</b>/<b>+</b> move one sample."
+                if clickable else
+                "Inline plots cannot report clicks, so the sliders do the picking: "
+                "<b>coarse</b> reaches the whole record, <b>fine</b> covers the "
+                "shaded band around the pick and re-centres after every move, "
+                "<b>-</b>/<b>+</b> move one sample. For click-picking run "
+                "<code>%matplotlib widget</code> and re-run this cell.")
         auto_box = W.VBox([W.HBox([w_method, w_repick, w_repick_all]),
                            W.HBox([w_tmin, w_tmax, w_qual])])
-        display_box = W.HBox([w_gain, w_zoom, w_tmaxplot])
+        display_box = W.HBox([w_gain, w_tmaxplot])
         settings = W.Accordion(children=[auto_box, display_box])
         settings.set_title(0, "automatic picker")
         settings.set_title(1, "display")
@@ -639,7 +805,8 @@ class PickingSession:
         panel = W.VBox([
             W.HBox([w_shot, w_keep_shot, w_drop_shot]),
             W.HBox([w_chan, w_prev, w_next, w_use, w_clear, w_auto1]),
-            W.HBox([w_time]),
+            W.HBox([w_coarse]),
+            W.HBox([w_time, w_earlier, w_later, w_span]),
             settings,
             W.HTML(f"<i>{hint}</i>"),
             fig.canvas if clickable else out,

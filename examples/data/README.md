@@ -5,6 +5,7 @@ One directory per dataset, laid out as below.
 | Dataset | Method | What it is |
 |---|---|---|
 | [`2026-09-18-refraction-line/`](2026-09-18-refraction-line/) | Refraction | 24-channel, 4 ft spacing, 92 ft spread, 13 shots from 8 positions, Geode SEG-Y in feet |
+| [`2026-09-25-srt-line/`](2026-09-25-srt-line/) | Refraction tomography | 24-channel, 3 ft spacing, 69 ft spread, 16 shots (every other geophone plus off-ends) in one multi-record Geode SEG-Y, feet |
 
 ```
 examples/data/

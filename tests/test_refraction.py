@@ -17,7 +17,6 @@ from shallowgeo.refraction import (
     traveltimes,
 )
 from shallowgeo.refraction.layers import branch_times, critical_distances
-from shallowgeo.refraction.tomography import traveltime_tomography
 
 V3, H3 = [600.0, 1500.0, 3000.0], [5.0, 12.0]
 
@@ -240,13 +239,6 @@ class TestPicking:
         assert plot_picks(survey, x="receiver").get_xlabel() == "position along line (m)"
         with pytest.raises(ValueError, match="x must be"):
             plot_picks(survey, x="sideways")
-
-
-class TestTomographyPlaceholder:
-    def test_raises_with_guidance(self):
-        table = pd.DataFrame({"shot": ["a", "b"], "time": [0.01, 0.02]})
-        with pytest.raises(NotImplementedError, match="fit_layers"):
-            traveltime_tomography(table)
 
 
 class TestFixedCrossovers:
@@ -517,3 +509,128 @@ class TestPlotTraveltimes:
     def test_unknown_axis_column(self, table):
         with pytest.raises(ValueError, match="no 'elevation' column"):
             plot_traveltimes(table, x="elevation")
+
+
+class TestPickingWidget:
+    """The pick controls, driven the way a student drives them.
+
+    One slider cannot both reach across a 128 ms record and place a pick to
+    the sample, so there are three controls; these tests are what keeps them
+    agreeing with each other.
+    """
+
+    @staticmethod
+    def _controls(panel):
+        found = {}
+
+        def walk(w):
+            for child in getattr(w, "children", ()):
+                walk(child)
+            key = (type(w).__name__, getattr(w, "description", None))
+            found.setdefault(key, w)
+
+        walk(panel)
+        return found
+
+    @pytest.fixture
+    def panel(self):
+        pytest.importorskip("ipywidgets")
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        session = PickingSession(_line_shots(2))
+        widget = session.widget()
+        return session, widget, self._controls(widget)
+
+    def test_fine_slider_is_a_window_around_the_pick(self, panel):
+        _, _, c = panel
+        fine = c[("FloatSlider", "fine (ms)")]
+        chan = c[("IntSlider", "channel")]
+        for channel in (4, 12, 20):
+            chan.value = channel
+            half = (fine.max - fine.min) / 2
+            assert fine.min <= fine.value <= fine.max
+            assert half == pytest.approx(0.2 * fine.value, rel=0.01), (
+                "the default window should be +/-20% of the pick time")
+
+    def test_fine_window_is_floored_and_capped(self, panel):
+        """20% of a very early or very late pick is useless in both directions."""
+        _, _, c = panel
+        fine, coarse = c[("FloatSlider", "fine (ms)")], c[("FloatSlider", "coarse (ms)")]
+        coarse.value = 2.0                      # 20% would be 0.4 ms
+        assert (fine.max - fine.min) / 2 == pytest.approx(1.0)
+        coarse.value = 120.0                    # 20% would be 24 ms
+        assert (fine.max - fine.min) / 2 == pytest.approx(10.0)
+
+    def test_coarse_slider_spans_the_whole_record(self, panel):
+        session, _, c = panel
+        coarse = c[("FloatSlider", "coarse (ms)")]
+        survey = session.shots[session.labels[0]]
+        assert (coarse.min, coarse.max) == (0.0, pytest.approx(1e3 * survey.duration))
+
+    def test_coarse_moves_the_pick_and_the_fine_window_follows(self, panel):
+        session, _, c = panel
+        coarse, fine = c[("FloatSlider", "coarse (ms)")], c[("FloatSlider", "fine (ms)")]
+        shot, chan = c[("Dropdown", "shot")], c[("IntSlider", "channel")]
+        coarse.value = 95.0
+        assert session.picks[shot.value].query(f"channel == {chan.value}")[
+            "time"].iloc[0] == pytest.approx(0.095)
+        assert fine.value == pytest.approx(95.0)
+        assert fine.min <= 95.0 <= fine.max
+
+    def test_nudge_buttons_move_exactly_one_sample(self, panel):
+        session, _, c = panel
+        fine = c[("FloatSlider", "fine (ms)")]
+        dt_ms = 1e3 * session.shots[session.labels[0]].sample_interval
+        before = fine.value
+        c[("Button", "+")].click()
+        assert fine.value - before == pytest.approx(dt_ms)
+        c[("Button", "-")].click()
+        c[("Button", "-")].click()
+        assert fine.value - before == pytest.approx(-dt_ms)
+
+    def test_window_recentres_so_repeated_drags_walk_anywhere(self, panel):
+        """Dragging to the edge must not trap the pick at the edge."""
+        _, _, c = panel
+        fine = c[("FloatSlider", "fine (ms)")]
+        start = fine.value
+        for _ in range(3):
+            fine.value = fine.max
+        assert fine.value > start + 1.0
+        assert (fine.min + fine.max) / 2 == pytest.approx(fine.value, abs=0.01)
+        assert fine.min < fine.value < fine.max
+
+    def test_span_dropdown_overrides_the_percentage(self, panel):
+        _, _, c = panel
+        fine, span = c[("FloatSlider", "fine (ms)")], c[("Dropdown", "+/-")]
+        span.value = 1.0
+        assert (fine.max - fine.min) / 2 == pytest.approx(1.0)
+        span.value = None
+        assert (fine.max - fine.min) / 2 == pytest.approx(0.2 * fine.value, rel=0.01)
+
+    def test_span_argument_sets_the_initial_window(self):
+        pytest.importorskip("ipywidgets")
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        session = PickingSession(_line_shots(1))
+        c = self._controls(session.widget(span=0.003))   # seconds
+        fine = c[("FloatSlider", "fine (ms)")]
+        assert (fine.max - fine.min) / 2 == pytest.approx(3.0)
+
+    def test_changing_channel_keeps_the_controls_consistent(self, panel):
+        session, _, c = panel
+        fine, coarse = c[("FloatSlider", "fine (ms)")], c[("FloatSlider", "coarse (ms)")]
+        chan, shot = c[("IntSlider", "channel")], c[("Dropdown", "shot")]
+        for channel in (1, 7, 14, 24):
+            chan.value = channel
+            pick = session.picks[shot.value].query(f"channel == {channel}")["time"].iloc[0]
+            assert fine.value == pytest.approx(1e3 * pick)
+            assert coarse.value == pytest.approx(1e3 * pick)
+
+    def test_a_trace_with_no_pick_does_not_break_the_window(self, panel):
+        session, _, c = panel
+        shot, chan = c[("Dropdown", "shot")], c[("IntSlider", "channel")]
+        fine = c[("FloatSlider", "fine (ms)")]
+        session.clear_pick(shot.value, 5)
+        chan.value = 5
+        assert fine.min < fine.max
+        assert fine.min <= fine.value <= fine.max

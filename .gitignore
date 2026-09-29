@@ -22,3 +22,6 @@ htmlcov/
 
 # The format-sample corpus is deliberately tracked.
 !tests/data/
+
+# Written by notebooks/refraction_tomography.ipynb when run locally.
+notebooks/tomography_output/

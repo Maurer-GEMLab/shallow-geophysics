@@ -8,6 +8,7 @@ both in Colab and on a local kernel from `pixi run -e dev jupyter lab`.
 |---|---|---|
 | `seismic_refraction_2layer.ipynb` | Interactive one-layer-over-half-space refraction: travel-time curves, ray paths, slope-intercept inversion of synthetic picks | synthetic |
 | `refraction_field_data.ipynb` | Refraction end to end on your own shot records: read every shot, pick first breaks and correct them by hand, all shots on one travel-time graph, 2- or 3-layer intercept-time fit, model-versus-data residuals, dip check | Geode SEG-2 or SEG-Y field data, uploaded by the student |
+| `refraction_tomography.ipynb` | Refraction tomography: two-pass picking, reciprocal-time check, shortest-path rays, Gauss-Newton inversion that finds mispicks and guides re-picking, velocity image with coverage, choosing λ, synthetic resolution test, optional pyGIMLi cross-check | `examples/data/2026-09-25-srt-line/` (16 shots, one multi-record SEG-Y), or the student's own dense line |
 | `passive_shear_wave_colab.ipynb` | Passive surface wave end to end: read and merge ATOM-1C `.atm` nodes, QC, array resolution limits, SPAC and passive-MASW dispersion, pick, invert for Vs | ATOM-1C field data, uploaded by the student |
 
 ## Planned
@@ -55,3 +56,17 @@ with station separation, and does the wavelength move when the frequency does
 — and stops at the inversion if either fails. Students should expect some
 datasets to be rejected, and the last section explains what array geometry
 would not have been.
+
+## A note on `refraction_tomography.ipynb`
+
+It runs top to bottom in about ten seconds on the example line, so it can be
+re-run freely while changing λ or the synthetic model. The inversion itself
+needs only NumPy and SciPy; pyGIMLi is an optional last section.
+
+Two things it is built to show. First, that tomography is also a picking
+tool: the misfit of a smooth model points straight at mispicks, and the
+model then guides a re-pick of every trace. Second, that the image is not the
+ground — it is faded wherever no ray went, and the synthetic test at the end
+lets students find out for themselves what a line of this size can and
+cannot resolve.
+
