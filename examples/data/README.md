@@ -21,6 +21,13 @@ examples/data/
     fetch.py                   only if raw/ is too large to commit
 ```
 
+Notebooks and scripts load a dataset with
+`shallowgeo.datasets.example_data("<slug>")`, which finds it in a clone of the
+repository or downloads it (once) anywhere else, such as Colab. Register a
+new dataset in `shallowgeo.datasets.EXAMPLES`. Keep `raw/` as a folder of the
+instrument files, not a zip: `load_shots` and `find_shot_files` accept either,
+so students can hand in a zip of their own data without it being needed here.
+
 Root-level `/data/` in this repository is git-ignored for bulk field data;
 `examples/data/` is not, so files placed here are tracked as usual.
 

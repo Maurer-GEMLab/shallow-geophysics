@@ -34,7 +34,7 @@ from .picking import _energy_ratio, pick_first_breaks, plot_picks, traveltime_ta
 __all__ = ["PickingSession", "load_shots"]
 
 
-def load_shots(paths: Iterable[str | Path], *, driver: str | None = None,
+def load_shots(paths, *, driver: str | None = None,
                exclude: Iterable[str] = ()) -> dict[str, SeismicSurvey]:
     """Read shot records and split every file into one gather per source.
 
@@ -47,17 +47,21 @@ def load_shots(paths: Iterable[str | Path], *, driver: str | None = None,
     Parameters
     ----------
     paths
-        File paths, in any order; the result is sorted by label.
+        Shot files in any order, a folder of them, a ``.zip`` of a folder, a
+        glob, or a list mixing these -- anything
+        :func:`shallowgeo.datasets.find_shot_files` accepts. The result is
+        sorted by label.
     exclude
         Skip files whose name contains any of these strings. Use it to leave
         out a record that the shot displays show to be unusable, rather than
         deleting the file.
     """
+    from ..datasets import find_shot_files
     from ..drivers import read
 
     exclude = tuple(exclude)
     shots: dict[str, SeismicSurvey] = {}
-    for path in sorted(Path(p) for p in paths):
+    for path in find_shot_files(paths):
         if any(e in path.name for e in exclude):
             continue
         survey = read(path, driver=driver) if driver else read(path)

@@ -122,8 +122,9 @@ worth showing a class before the flag is explained.
 [`notebooks/refraction_field_data.ipynb`](../../../notebooks/refraction_field_data.ipynb)
 reaches the same answer interactively, and derives the 50 ms bound from the
 data instead of being told it: a first pass with no bound gives a direct-wave
-velocity, and no first break can arrive later than the direct wave. Point its
-`DATA_DIR` at `raw/` and put `"4011"` in `EXCLUDE`.
+velocity, and no first break can arrive later than the direct wave. It loads
+this dataset when no other data are chosen (its Option D,
+`example_data("2026-09-18-refraction-line")`); put `"4011"` in `EXCLUDE`.
 
 Horizontal layers are assumed. The forward and reverse off-end shots
 (`4014`/`4023` against `4009`/`4017`) are there so that assumption can be
