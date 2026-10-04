@@ -116,33 +116,23 @@ class SpacResult:
         )
 
 
-def spac_coherency(
+def window_spectra(
     survey: SeismicSurvey,
     *,
     window: float = 30.0,
     overlap: float = 0.5,
+    anti_trigger: tuple[float, float] | None = (0.3, 3.0),
     fmin: float = 0.5,
     fmax: float = 60.0,
-    anti_trigger: tuple[float, float] | None = (0.3, 3.0),
-    smoothing: float | None = 40.0,
-    layout: ArrayLayout | None = None,
-) -> SpacResult:
-    """Average the complex coherency of every station pair over time windows.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Tapered spectra of every window that survives the amplitude gate.
 
-    ``anti_trigger`` rejects windows whose RMS on any node falls outside the
-    given multiples of that node's median. This is the standard Geopsy-style
-    amplitude gate and on real records it is not optional: a handful of
-    windows containing a vehicle or a footfall next to one node carry orders
-    of magnitude more energy than the ambient field, and because that energy
-    is *local to one node* it enters the cross-spectrum as noise while
-    dominating both auto-spectra. On the September 2026 test deployment,
-    leaving the gate off drove the measured coherency from 0.53 to 0.03 --
-    it does not merely add scatter, it erases the signal.
-
-    Pass ``anti_trigger=None`` to keep every window, which is what you want
-    when the transients *are* the signal (see :mod:`shallowgeo.passive.events`).
+    Returns ``(spectra, frequency, keep)``: spectra are
+    ``(n_nodes, n_kept_windows, n_freq)``, ``keep`` flags which of the
+    candidate windows were used. Shared by :func:`spac_coherency` and
+    :func:`~shallowgeo.passive.plane_wave_fit`, so that both see exactly the
+    same data; see :func:`spac_coherency` for why the gate matters.
     """
-    layout = layout or array_layout(survey)
     fs = survey.sample_rate
     nperseg = int(round(window * fs))
     if nperseg < 16:
@@ -178,7 +168,40 @@ def spac_coherency(
     spectra = np.fft.rfft(kept, axis=2)
     freqs = np.fft.rfftfreq(nperseg, 1.0 / fs)
     band = (freqs >= fmin) & (freqs <= fmax)
-    spectra, freqs = spectra[:, :, band], freqs[band]
+    return spectra[:, :, band], freqs[band], keep
+
+
+def spac_coherency(
+    survey: SeismicSurvey,
+    *,
+    window: float = 30.0,
+    overlap: float = 0.5,
+    fmin: float = 0.5,
+    fmax: float = 60.0,
+    anti_trigger: tuple[float, float] | None = (0.3, 3.0),
+    smoothing: float | None = 40.0,
+    layout: ArrayLayout | None = None,
+) -> SpacResult:
+    """Average the complex coherency of every station pair over time windows.
+
+    ``anti_trigger`` rejects windows whose RMS on any node falls outside the
+    given multiples of that node's median. This is the standard Geopsy-style
+    amplitude gate and on real records it is not optional: a handful of
+    windows containing a vehicle or a footfall next to one node carry orders
+    of magnitude more energy than the ambient field, and because that energy
+    is *local to one node* it enters the cross-spectrum as noise while
+    dominating both auto-spectra. On the September 2026 test deployment,
+    leaving the gate off drove the measured coherency from 0.53 to 0.03 --
+    it does not merely add scatter, it erases the signal.
+
+    Pass ``anti_trigger=None`` to keep every window, which is what you want
+    when the transients *are* the signal (see :mod:`shallowgeo.passive.events`).
+    """
+    layout = layout or array_layout(survey)
+    spectra, freqs, keep = window_spectra(
+        survey, window=window, overlap=overlap, anti_trigger=anti_trigger,
+        fmin=fmin, fmax=fmax,
+    )
 
     power = np.mean(np.abs(spectra) ** 2, axis=1)
     pairs = layout.separations
@@ -224,11 +247,21 @@ class SeparationTest:
     clearly negative slope. A slope near zero means the coherency is the same
     at 1 m and 50 m, which no travelling wave can produce.
 
-    ``velocity_ratio`` is the sharper test. It inverts each pair separately
-    and takes the spread of the answers. Under the failure modes in the module
-    docstring the inverted velocity is exactly proportional to ``r``, so this
-    ratio reproduces the ratio of the largest to smallest separation
-    (``geometry_ratio``) instead of collapsing towards 1.
+    ``velocity_ratio`` inverts each separation on its own and takes the
+    spread of the answers. Under the failure modes in the module docstring the
+    inverted velocity is proportional to ``r``, so the spread reproduces the
+    spread of the separations instead of collapsing towards zero.
+
+    That makes its threshold geometry-dependent, which is a weakness: on a
+    compact array whose separations span only a factor of 2.5 (2026-10-01,
+    5.6-14 m), velocity tracking ``r`` exactly gives a spread of about 0.3,
+    under the 0.35 tolerance. ``velocity_slope`` closes the gap. It is the
+    slope of log velocity against log separation across rings: 0 when every
+    separation agrees, 1 when the velocity simply scales with ``r``, whatever
+    the geometry. The same thing happens when the wavelength is far longer
+    than the array -- the small deficit below 1 that :math:`J_0` produces is
+    then swamped by the incoherent-noise deficit, which is the same at every
+    separation and so again inverts to ``c`` proportional to ``r``.
     """
 
     frequency: np.ndarray
@@ -237,6 +270,7 @@ class SeparationTest:
     geometry_ratio: float
     verdict: str
     usable: np.ndarray
+    velocity_slope: np.ndarray | None = None
 
     def summary(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -244,6 +278,7 @@ class SeparationTest:
                 "frequency": self.frequency,
                 "slope_per_m": self.slope,
                 "velocity_ratio": self.velocity_ratio,
+                "velocity_slope": self.velocity_slope,
                 "usable": self.usable,
             }
         )
@@ -272,12 +307,18 @@ def separation_rings(distances: np.ndarray, *, tolerance: float = 0.05) -> np.nd
 
 
 def separation_test(
-    result: SpacResult, *, tolerance: float = 0.35, ring_tolerance: float = 0.05
+    result: SpacResult,
+    *,
+    tolerance: float = 0.35,
+    ring_tolerance: float = 0.05,
+    max_velocity_slope: float = 0.5,
 ) -> SeparationTest:
     """Test the SPAC assumptions against the measured coherency.
 
-    A frequency is usable when the coherency falls with separation *and* two
-    or more distinct separations invert to the same velocity.
+    A frequency is usable when the coherency falls with separation, two or
+    more distinct separations invert to the same velocity, and those
+    velocities do not climb with separation (``velocity_slope`` below
+    ``max_velocity_slope``; see :class:`SeparationTest`).
 
     Requiring **distinct separations**, rather than simply two pairs, is what
     makes the test mean anything. Past the first zero of :math:`J_0` the
@@ -297,7 +338,10 @@ def separation_test(
     rings = separation_rings(distances, tolerance=ring_tolerance)
     n_rings = int(rings.max()) + 1
 
-    slopes, ratios = [], []
+    ring_distance = np.array(
+        [distances[rings == ring].mean() for ring in range(n_rings)]
+    )
+    slopes, ratios, trends = [], [], []
     for k in range(result.frequency.size):
         rho = result.coherency[:, k]
         good = np.isfinite(rho)
@@ -307,7 +351,7 @@ def separation_test(
             slopes.append(np.nan)
 
         # One velocity per ring, then compare rings against each other.
-        per_ring = []
+        per_ring, ring_r = [], []
         for ring in range(n_rings):
             members = rings == ring
             values = [
@@ -317,14 +361,17 @@ def separation_test(
             values = [v for v in values if np.isfinite(v)]
             if values:
                 per_ring.append(float(np.median(values)))
+                ring_r.append(ring_distance[ring])
         if len(per_ring) >= 2:
             per_ring = np.array(per_ring)
             ratios.append(float(np.std(per_ring) / np.mean(per_ring)))
+            trends.append(float(np.polyfit(np.log(ring_r), np.log(per_ring), 1)[0]))
         else:
             ratios.append(np.nan)
+            trends.append(np.nan)
 
-    slopes, ratios = np.array(slopes), np.array(ratios)
-    usable = (slopes < 0) & (ratios < tolerance)
+    slopes, ratios, trends = np.array(slopes), np.array(ratios), np.array(trends)
+    usable = (slopes < 0) & (ratios < tolerance) & (trends < max_velocity_slope)
 
     fraction = float(np.nanmean(usable)) if usable.size else 0.0
     if fraction > 0.5:
@@ -343,6 +390,7 @@ def separation_test(
         geometry_ratio=geometry_ratio,
         verdict=verdict,
         usable=usable,
+        velocity_slope=trends,
     )
 
 

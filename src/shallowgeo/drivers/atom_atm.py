@@ -74,6 +74,7 @@ velocity derived downstream.
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,23 @@ _GPS_RE = re.compile(
 )
 # <unit id><minute>.atm, e.g. 10152845.atm -> unit 101525, minute 45
 _NAME_RE = re.compile(r"^(?P<unit>\d{6})(?P<minute>\d{2})$")
+
+
+def _utc(when: Any) -> pd.Timestamp:
+    """Naive input is read as UTC, which is what the nodes record.
+
+    ``pd.Timestamp(x, tz="UTC")`` refuses an already-localised timestamp
+    rather than converting it, so the two cases are handled separately.
+    """
+    stamp = pd.Timestamp(when)
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+
+
+def _local_metres(latitude, longitude, lat0: float, lon0: float):
+    """East/north offsets in metres on a local tangent plane."""
+    east = (np.asarray(longitude, float) - lon0) * 111320.0 * np.cos(np.radians(lat0))
+    north = (np.asarray(latitude, float) - lat0) * 111320.0
+    return east, north
 
 
 def _is_atm(path: Path) -> bool:
@@ -344,6 +362,136 @@ def group_deployments(scan: pd.DataFrame, *, max_gap: str | pd.Timedelta = "6h")
     return pd.DataFrame(rows)
 
 
+def _node_moves(
+    times, east, north, *, files: int = 10, min_shift: float = 5.0, min_score: float = 5.0
+) -> list[pd.Timestamp]:
+    """Times at which one node's GPS position steps and stays stepped.
+
+    Compares the median of the ``files`` fixes before each file with the
+    median of the ``files`` from it onwards. The step has to clear
+    ``min_shift`` metres *and* stand ``min_score`` times above the scatter of
+    the fixes about those two medians: a stationary node's uncorrected GPS
+    wanders by several metres over an hour, and on 2026-09-25 a 5-minute
+    window called that wander a move four times. Ten-minute windows and the
+    scatter test leave only the real rearrangement on 2026-10-01, which
+    scores 8-29.
+    """
+    times = list(times)
+    east, north = np.asarray(east, float), np.asarray(north, float)
+    score = np.zeros(len(times))
+    for i in range(files, len(times) - files + 1):
+        b_e, b_n = np.median(east[i - files : i]), np.median(north[i - files : i])
+        a_e, a_n = np.median(east[i : i + files]), np.median(north[i : i + files])
+        shift = np.hypot(a_e - b_e, a_n - b_n)
+        spread = np.r_[
+            np.hypot(east[i - files : i] - b_e, north[i - files : i] - b_n),
+            np.hypot(east[i : i + files] - a_e, north[i : i + files] - a_n),
+        ]
+        noise = max(1.4826 * float(np.median(spread)), 0.5)
+        if shift > min_shift:
+            score[i] = shift / noise
+    above = score > min_score
+    # One move per contiguous run above threshold, at its peak.
+    edges = np.flatnonzero(np.diff(np.r_[0, above.astype(int), 0]))
+    return [
+        times[lo + int(np.argmax(score[lo:hi]))]
+        for lo, hi in zip(edges[::2], edges[1::2], strict=True)
+    ]
+
+
+def split_layouts(
+    scan: pd.DataFrame,
+    *,
+    min_shift: float = 5.0,
+    files: int = 10,
+    margin: str | pd.Timedelta = "2min",
+    max_gap: str | pd.Timedelta = "6h",
+) -> pd.DataFrame:
+    """Split each deployment where the nodes were picked up and moved.
+
+    :func:`group_deployments` splits on time gaps, so an afternoon in which
+    the array is recorded in one layout, rearranged in a few minutes, and
+    recorded again comes back as a single deployment -- and a median GPS
+    position over the whole of it lands each moved node somewhere between
+    its two stations. On 2026-10-01 that put three of the five nodes 5-7 m
+    from where they were, at separations of 5-15 m.
+
+    A move is a step in a node's median GPS position that persists for
+    ``files`` minutes either side and stands well clear of that node's own
+    GPS scatter (see :func:`_node_moves`). Medians, because single fixes
+    routinely land a kilometre off. Moves by different nodes within ten
+    minutes of each other are one rearrangement, and ``margin`` is trimmed
+    either side of it to drop the handling noise.
+
+    Returns one row per layout with ``start`` and ``end`` ready to pass to
+    :func:`read_atm_deployment`, the nodes that recorded in it, the nodes
+    that moved at its start, and its centroid. The centroid matters more
+    than it looks: run over the June-July 2026 corpus this found that
+    2026-07-18 is two arrays a kilometre apart, not one, and that 101530
+    logged 85 minutes 3.4 km away before 2026-06-18 began.
+    """
+    columns = ["deployment", "layout", "start", "end", "duration_min",
+               "n_nodes", "nodes", "moved", "latitude", "longitude"]
+    frame = scan.dropna(subset=["start_time"]).sort_values("start_time").copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    frame["deployment"] = (frame["start_time"].diff() > pd.Timedelta(max_gap)).cumsum()
+    margin = pd.Timedelta(margin)
+
+    rows = []
+    for ident, part in frame.groupby("deployment"):
+        located = part.dropna(subset=["latitude", "longitude"])
+        lat0, lon0 = located["latitude"].median(), located["longitude"].median()
+        moves = []                                    # (time, node)
+        for node, track in located.groupby("node"):
+            track = track.sort_values("start_time")
+            east, north = _local_metres(track["latitude"], track["longitude"], lat0, lon0)
+            moves += [
+                (when, node)
+                for when in _node_moves(
+                    track["start_time"], east, north, files=files, min_shift=min_shift
+                )
+            ]
+
+        moves.sort()
+        breaks: list[tuple[pd.Timestamp, pd.Timestamp, set]] = []
+        for when, node in moves:
+            if breaks and when - breaks[-1][1] <= pd.Timedelta("10min"):
+                breaks[-1] = (breaks[-1][0], when, breaks[-1][2] | {node})
+            else:
+                breaks.append((when, when, {node}))
+
+        start, end = part["start_time"].min(), part["end_time"].max()
+        bounds = [start] + [b for lo, hi, _ in breaks for b in (lo - margin, hi + margin)] + [end]
+        moved = [set()] + [nodes for _, _, nodes in breaks]
+        layout = 0
+        for (lo, hi), was_moved in zip(
+            zip(bounds[::2], bounds[1::2], strict=True), moved, strict=True
+        ):
+            inside = part[(part["end_time"] > lo) & (part["start_time"] < hi)]
+            if hi <= lo or inside.empty:
+                continue            # nothing recorded while the array was moved
+            nodes = sorted(inside["node"].unique())
+            rows.append(
+                {
+                    "deployment": int(ident),
+                    "layout": layout,
+                    "start": lo,
+                    "end": hi,
+                    "duration_min": (hi - lo).total_seconds() / 60.0,
+                    "n_nodes": len(nodes),
+                    "nodes": nodes,
+                    "moved": sorted(was_moved),
+                    # The centroid, so that a layout recorded at a different
+                    # site altogether stands out from a rearrangement.
+                    "latitude": float(inside["latitude"].median()),
+                    "longitude": float(inside["longitude"].median()),
+                }
+            )
+            layout += 1
+    return pd.DataFrame(rows, columns=columns)
+
+
 def read_atm_deployment(
     source: str | Path | Iterable[str | Path],
     *,
@@ -399,15 +547,19 @@ def read_atm_deployment(
         raise ValueError("no .atm files matched the requested nodes")
 
     dt = 1.0 / sample_rate
-    starts = [r["start_time"] for r in records]
-    ends = [
-        r["start_time"] + pd.Timedelta(seconds=r["data"].size * dt) for r in records
-    ]
-    t0 = pd.Timestamp(start, tz="UTC") if start is not None else min(starts)
-    t1 = pd.Timestamp(end, tz="UTC") if end is not None else max(ends)
+    for r in records:
+        r["end_time"] = r["start_time"] + pd.Timedelta(seconds=r["data"].size * dt)
+    t0 = _utc(start) if start is not None else min(r["start_time"] for r in records)
+    t1 = _utc(end) if end is not None else max(r["end_time"] for r in records)
     n_samples = int(round((t1 - t0).total_seconds() * sample_rate))
     if n_samples <= 0:
         raise ValueError(f"empty time window {t0} to {t1}")
+    # Only files inside the window count -- for the data, and just as much
+    # for the positions: a node moved to a new station outside the window
+    # must not pull its median fix towards the old one.
+    records = [r for r in records if r["end_time"] > t0 and r["start_time"] < t1]
+    if not records:
+        raise ValueError(f"no .atm file overlaps the window {t0} to {t1}")
 
     node_ids = sorted({r["unit_id"] for r in records})
     index = {node: i for i, node in enumerate(node_ids)}
@@ -421,18 +573,47 @@ def read_atm_deployment(
         data[index[r["unit_id"]], lo:hi] = chunk[lo - offset : hi - offset]
 
     positions = positions or {}
-    lon, lat, elev = [], [], []
+    lon, lat, elev, scatter = [], [], [], {}
     for node in node_ids:
+        fixes = [r for r in records if r["unit_id"] == node]
+        fix_lon = np.array([f["longitude"] for f in fixes], float)
+        fix_lat = np.array([f["latitude"] for f in fixes], float)
+        # Median, not mean: a handful of fixes per deployment land a
+        # kilometre away and would drag a mean well off the station.
+        x = float(np.nanmedian(fix_lon))
+        y = float(np.nanmedian(fix_lat))
+        z = float(np.nanmedian([f["elevation"] for f in fixes]))
+        east, north = _local_metres(fix_lat, fix_lon, y, x)
+        distance = np.hypot(east, north)
+        scatter[node] = float(1.4826 * np.nanmedian(distance)) if distance.size else np.nan
         if node in positions:
             x, y, z = positions[node]
-        else:
-            fixes = [r for r in records if r["unit_id"] == node]
-            # Median, not mean: a handful of fixes per deployment land a
-            # kilometre away and would drag a mean well off the station.
-            x = float(np.nanmedian([f["longitude"] for f in fixes]))
-            y = float(np.nanmedian([f["latitude"] for f in fixes]))
-            z = float(np.nanmedian([f["elevation"] for f in fixes]))
         lon.append(x), lat.append(y), elev.append(z)
+
+    moved = {}
+    for node in node_ids:
+        if node in positions:
+            continue
+        fixes = sorted(
+            (r for r in records if r["unit_id"] == node), key=lambda r: r["start_time"]
+        )
+        east, north = _local_metres(
+            [f["latitude"] for f in fixes], [f["longitude"] for f in fixes],
+            float(np.nanmedian([f["latitude"] for f in fixes])),
+            float(np.nanmedian([f["longitude"] for f in fixes])),
+        )
+        when = _node_moves([f["start_time"] for f in fixes], east, north)
+        if when:
+            moved[node] = when[0]
+    if moved:
+        warnings.warn(
+            "node position steps inside this window: "
+            + ", ".join(f"{n} at {t:%H:%M} UTC" for n, t in moved.items())
+            + ". The array was probably rearranged, and the median position "
+            "falls between the two stations. Use split_layouts() to find each "
+            "layout's window, or pass taped positions=.",
+            stacklevel=2,
+        )
 
     geometry = Geometry(
         ids=node_ids,
@@ -458,6 +639,10 @@ def read_atm_deployment(
             "n_nodes": len(node_ids),
             "n_files": len(records),
             "folders": sorted({Path(r["source_file"]).parent.name for r in records}),
+            # Robust spread of the per-minute GPS fixes about each node's
+            # median, in metres. It is the floor on how well the separations
+            # are known when no taped positions were passed.
+            "gps_scatter": scatter,
             "coverage": {
                 node: float(
                     np.isfinite(data[index[node]]).sum() / n_samples

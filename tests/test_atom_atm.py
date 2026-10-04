@@ -27,6 +27,7 @@ from shallowgeo.drivers.atom_atm import (
     read_atm_deployment,
     read_atm_file,
     scan_atm,
+    split_layouts,
 )
 
 FS = 250.0
@@ -232,3 +233,75 @@ def test_sample_rate_is_a_parameter(one_minute):
     """A firmware change must not silently rescale every derived velocity."""
     path, _ = one_minute
     assert read_atm(path, sample_rate=500.0).duration == pytest.approx(30.0)
+
+
+def test_window_accepts_timezone_aware_timestamps(tmp_path):
+    """``split_layouts`` hands back aware timestamps; they must go straight in."""
+    root = _deployment(tmp_path)
+    naive = read_atm_deployment(root, start="2026-09-18 17:00:00", end="2026-09-18 17:02:00")
+    aware = read_atm_deployment(
+        root,
+        start=pd.Timestamp("2026-09-18 17:00:00", tz="UTC"),
+        end=pd.Timestamp("2026-09-18 12:02:00", tz="America/Chicago"),
+    )
+    assert aware.start_time == naive.start_time
+    assert aware.duration == pytest.approx(naive.duration)
+
+
+def _moved_array(tmp_path, *, move_at=20, minutes=40):
+    """Two nodes; 101527 is carried 15 m north at minute ``move_at``.
+
+    GPS jitter of a metre or two on every fix, and one kilometre-off fix,
+    as the real nodes produce.
+    """
+    rng = np.random.default_rng(4)
+    for node, base in (("101525", 0.0), ("101527", 20.0)):
+        for minute in range(minutes):
+            hour, mm = 15 + minute // 60, minute % 60
+            folder = tmp_path / f"261001{hour:02d}"
+            folder.mkdir(exist_ok=True)
+            north = base + (15.0 if node == "101527" and minute >= move_at else 0.0)
+            north += rng.normal(scale=1.5)
+            if node == "101525" and minute == 7:
+                north += 1000.0
+            write_atm(
+                folder / f"{node}{mm:02d}.atm",
+                rng.integers(-500, 500, size=15000),
+                unit_id=node,
+                start=f"2026/10/01 {hour:02d}:{mm:02d}:00",
+                latitude=37.925 + north / 111320.0,
+            )
+    return tmp_path
+
+
+def test_split_layouts_finds_a_rearranged_array(tmp_path):
+    root = _moved_array(tmp_path)
+    layouts = split_layouts(scan_atm(root.rglob("*.atm")))
+    assert len(layouts) == 2
+    first, second = layouts.iloc[0], layouts.iloc[1]
+    assert second["moved"] == ["101527"]
+    move = pd.Timestamp("2026-10-01 15:20:00", tz="UTC")
+    assert first["end"] <= move <= second["start"]
+    assert (second["start"] - first["end"]) <= pd.Timedelta("6min")
+
+
+def test_split_layouts_ignores_gps_wander(tmp_path):
+    """Jitter and a kilometre-off fix on a stationary node are not a move."""
+    root = _moved_array(tmp_path, move_at=10_000)
+    assert len(split_layouts(scan_atm(root.rglob("*.atm")))) == 1
+
+
+def test_positions_come_from_the_requested_window(tmp_path):
+    root = _moved_array(tmp_path)
+    with pytest.warns(UserWarning, match="101527"):
+        read_atm_deployment(root)
+
+    before = read_atm_deployment(root, end="2026-10-01 15:18:00")
+    after = read_atm_deployment(root, start="2026-10-01 15:22:00")
+    lat = {
+        name: dict(zip(s.geometry.table["id"], s.geometry.table["y"]))["101527"]
+        for name, s in (("before", before), ("after", after))
+    }
+    shift = (lat["after"] - lat["before"]) * 111320.0
+    assert shift == pytest.approx(15.0, abs=2.0)
+    assert after.metadata["gps_scatter"]["101527"] < 3.0

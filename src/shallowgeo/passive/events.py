@@ -245,7 +245,8 @@ def event_dispersion_image(
     if not layout.is_linear:
         raise ValueError(
             f"phase-shift imaging assumes a line array, but this one has "
-            f"linearity {layout.linearity:.2f}. Use SPAC for a 2-D array."
+            f"linearity {layout.linearity:.2f}. For a 2-D array use "
+            "plane_wave_fit(survey, events=events), or SPAC for ambient noise."
         )
 
     fs = survey.sample_rate

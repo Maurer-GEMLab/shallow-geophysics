@@ -174,13 +174,18 @@ record a second or more when surface waves are the goal.
 No source, so the array itself has to be interrogated before it is trusted.
 
 ```python
-from shallowgeo.drivers.atom_atm import scan_atm, group_deployments, read_atm_deployment
+from shallowgeo.drivers.atom_atm import (
+    scan_atm, group_deployments, split_layouts, read_atm_deployment,
+)
 from shallowgeo import passive as P
 
 scan = scan_atm(Path("ATOM-1C_PassiveShearData").rglob("*.atm"))
 print(group_deployments(scan))          # hourly folders -> field days
+layouts = split_layouts(scan)           # ...and each day -> array layouts
+print(layouts)                          # a rearranged array is two surveys
 
-survey = read_atm_deployment("ATOM-1C_PassiveShearData/26091816")
+first = layouts.iloc[0]
+survey = read_atm_deployment(scan.path, start=first.start, end=first.end)
 print(P.node_coverage(survey))          # who recorded, when, how loud
 
 layout = P.array_layout(survey)
@@ -192,9 +197,14 @@ spac = P.spac_coherency(survey, window=30.0)
 print(P.separation_test(spac).verdict)
 curve = P.spac_dispersion(spac)         # raises if the assumptions fail
 
+# 2-D array, noise mostly from one side: fit velocity and direction.
+fit = P.plane_wave_fit(survey)          # a velocity *bracket* per frequency
+print(fit.table)                        # velocity_max = inf: lower bound only
+
 # Quiet site, busy road: use the traffic as the source instead.
 events = P.detect_events(survey, threshold=3.0)
-image = P.event_dispersion_image(survey, events)
+image = P.event_dispersion_image(survey, events)   # line arrays
+fit = P.plane_wave_fit(survey, events=events)      # 2-D arrays
 ```
 
 `separation_test` and `wavelength_test` exist because passive processing
@@ -203,6 +213,10 @@ a curve whose wavelength stays put while the frequency sweeps past it,
 inverts through `J0` into a smooth rising curve that describes the array
 rather than the ground. Both checks run automatically inside
 `spac_dispersion`, which refuses rather than returning such a curve.
+`plane_wave_fit` reports brackets for the same reason: over shallow rock the
+ambient wavelength can be a hundred times the array, and then only a lower
+bound on velocity is a measurement. [docs/atom-1c-passive-2026.md](docs/atom-1c-passive-2026.md)
+works through why, on the 2026 field data.
 
 See [notebooks/passive_shear_wave_colab.ipynb](notebooks/passive_shear_wave_colab.ipynb)
 for the whole workflow with the diagnostics plotted.
