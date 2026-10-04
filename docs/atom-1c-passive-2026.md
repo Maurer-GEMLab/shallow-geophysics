@@ -1,12 +1,28 @@
-# ATOM-1C passive dataset, June–September 2026
+# ATOM-1C passive datasets, June–October 2026
 
-What is in `data/ATOM-1C_PassiveShearData.zip`, what the format is, and what
-the data can and cannot support. Written up because the format had to be
+What is in the two ATOM-1C zips, what the format is, and what the data can
+and cannot support. Written up because the format had to be
 reverse-engineered and because the processing conclusion is negative — both
 are the kind of thing that gets rediscovered expensively.
 
-Source: 1391 `.atm` files, 34 MB, five nodes (`101525`, `101527`, `101528`,
-`101529`, `101530`), three field days.
+| Zip | Files | Field days |
+|---|---|---|
+| `data/ATOM-1C_PassiveShearData.zip` | 1391 `.atm`, 34 MB | 2026-06-18, 07-18, 09-18 |
+| `data/ATOM_updated.zip` | 1807 `.atm`, 109 MB | 2026-09-25, 10-01 |
+
+Five nodes throughout (`101525`, `101527`, `101528`, `101529`, `101530`).
+
+**Short version.** The October analysis of the 2-D arrays
+([below](#october-2026-the-2-d-arrays)) changes the interpretation of
+everything before it. The strong, coherent ambient field at both sites is
+not a common-mode artefact: it is a fast wave, at least 1.5–2 km/s, carried
+by the shallow bedrock. At site B (about 1.7 m of soil over rock) a surface
+wave slow enough to describe the soil exists only above roughly 30 Hz, where
+the ambient field no longer correlates across even 5 m. At site A (about
+6 m over rock) the soil's band reaches down to 15 Hz, inside the coherent
+band, but the fast rock-guided field still dominates it there. The arrays
+were not too small or too few for the soil; at these sites the ambient
+field the nodes record barely carries the soil's velocity.
 
 ## The `.atm` format
 
@@ -51,10 +67,12 @@ ends exactly on the minute boundary where the next one begins. `read_atm`
 takes `sample_rate` as a parameter so a firmware change cannot silently
 rescale every derived velocity.
 
-## The three deployments
+## The three deployments in the first zip
 
 Folders are hourly, deployments are not: one afternoon spans three folders.
-`group_deployments` splits on time gaps instead of folder names.
+`group_deployments` splits on time gaps instead of folder names, and
+`split_layouts` splits further wherever the nodes' GPS positions step, which
+is how the two surprises noted under the table were found.
 
 | Date | Site | Nodes | Aperture | Layout |
 |---|---|---|---|---|
@@ -65,6 +83,18 @@ Folders are hourly, deployments are not: one afternoon spans three folders.
 June and July were small-aperture arrays; September was a line. June and
 September are the same site, roughly 27 m apart, so in principle their
 wavelength bands are complementary.
+
+Two things in this zip are not survey data, and the original analysis
+included both:
+
+- **2026-07-18 after 17:44 UTC was recorded at base, not in the field.**
+  All five nodes kept recording for 88 minutes at 37.9554 N, 91.7757 W, about
+  1 km from site B. 101530 also logged 85 minutes at the same spot before the
+  June 18 deployment started. The July field array is 15:38–17:00 only. The
+  original July coherency, including the "101525 is dead" result below, was
+  computed over both stretches with field positions, and should be redone
+  on 15:38–17:00 before it is relied on.
+- **2026-06-18 before 22:45 UTC** is 101530 alone at that base location.
 
 ### Known problems
 
@@ -80,6 +110,14 @@ wavelength bands are complementary.
   medians, not means; inlier scatter is 0.4–3.5 m.
 
 ## Why no Vs profile comes out of this
+
+> **Superseded in part.** This section was written from the June–September
+> data alone. Its measurements stand; its explanation — a common-mode
+> correlation between nodes — does not. The 2-D arrays of September 25 and
+> October 1 show the same near-zero phase across *every* pair orientation
+> and resolve a consistent arrival direction, which a common-mode signal
+> cannot have, and the Sept 25 hammer shots travel at the same speeds. See
+> [October 2026: the 2-D arrays](#october-2026-the-2-d-arrays).
 
 The ambient coherency is *real* — it survives every control. Time-shifting one
 node by 4, 20 or 120 s, time-reversing it, or pairing nodes from different
@@ -101,11 +139,13 @@ ground. This is what `wavelength_test` detects.
 proportional to `r`, which is what you get when ρ is the same at every
 separation. This is what `separation_test` detects.
 
-Physically this is a partial common-mode correlation: a coherent fraction
-α ≈ 0.3–0.5 shared by all nodes with near-zero phase lag (4–9° across 14.6 m),
-plus node-local noise. Either broadside-incident energy or shared
-non-propagating motion; a line array cannot distinguish the two, which is one
-more reason not to use a line.
+At the time this was read as a partial common-mode correlation: a coherent
+fraction α ≈ 0.3–0.5 shared by all nodes with near-zero phase lag (4–9°
+across 14.6 m), plus node-local noise — either broadside-incident energy or
+shared non-propagating motion, which a line array cannot distinguish. The
+2-D arrays settle it in favour of a third option: a propagating wave so fast
+that its wavelength dwarfs the array.
+Either way the conclusion here holds — no soil velocity comes out of it.
 
 **What does survive.** Transient events — vehicles, footfalls — do propagate.
 One at 16:37:45 moves out monotonically across the whole 77 m line at 236 m/s,
@@ -188,7 +228,162 @@ usable but its worst-case error is still poor.
 on these lines: radii geometrically spaced across the wavelengths the target
 depths need, azimuths spread by the golden angle so no two stations line up.
 
-## What would have worked
+## October 2026: the 2-D arrays
+
+`data/ATOM_updated.zip` holds two deployments, both 2-D, at both sites, with
+all five nodes recording throughout.
+
+| Layout | Site | Common window, UTC | Separations | Coherent fraction, 3–15 Hz |
+|---|---|---|---|---|
+| 2026-09-25 | B (37.9641 N, 91.7775 W) | 16:10–17:52 | 6–34 m | 0.87–0.96 |
+| 2026-10-01 compact | A (37.9250 N, 91.7766 W) | 15:30–17:35 | 5.6–14 m | 0.75–0.90 |
+| 2026-10-01 wide | A | 17:48–19:12 | 12–39 m | 0.61–0.82 |
+
+On October 1 the array was rearranged at about 17:37 UTC: 101525, 101528,
+101529 and 101530 moved, 101527 stayed. `group_deployments` returns the day
+as one deployment, so take each layout's window from `split_layouts` and
+pass it to `read_atm_deployment`, which now takes positions only from files
+inside the window and warns when a node's position steps within it.
+
+### The data are clean
+
+- Every one of the 1807 files reads; the sign-byte check passes throughout.
+- Ambient levels are 35–50 dB above the digitiser floor (visible as the
+  anti-alias cut above ~110 Hz), and between 3 and 10 Hz the spectra of the
+  five nodes agree to about 0.5 dB.
+- Saturation is limited to a handful of minutes during placement, the
+  October 1 move, and hammer blows a metre from a node.
+- Timing is sound. The 2026-09-25 refraction shots (12:54–13:12 local)
+  appear on every node at 30× to 37,000× background, and their arrivals
+  differ between nodes by a few milliseconds to a few tens of milliseconds,
+  in a pattern consistent with the source moving along the line.
+
+**Positions are the weak point.** Only the nodes' own GPS is available:
+1–3 m of scatter per fix, and stationary nodes that appear to wander 5–10 m
+over two hours. On the 5.6 m pairs that is a 20–50 % uncertainty in
+separation. A taped layout would remove this entirely; `read_atm_deployment`
+accepts `positions=` for it, and `plane_wave_fit` carries `position_error=`
+into its brackets.
+
+### What the arrays see
+
+`plane_wave_fit` fits one plane wave per frequency to all ten pairs and
+reports velocity and direction with a 68 % bracket. Over the whole
+3–15 Hz band, on every layout:
+
+- **One plane wave explains essentially all the coherency**
+  (`single_wave` 0.998–1.000). The ambient field is directional, so SPAC's
+  azimuthal-average assumption does not hold, whatever `separation_test`
+  says.
+- **The phase across the array is a few degrees in every pair orientation.**
+  Residuals after the fit are mostly under 4°. The apparent velocity is at least
+  1.5–2 km/s from every direction, so this is not a slow wave arriving
+  broadside to a line, which was the September worry.
+- **The direction is stable.** Sept 25: from 108–153° (ESE) at every
+  frequency and through six 15-minute blocks. October 1, compact layout:
+  from roughly north at 3–10 Hz and from 290–320° at 14–20 Hz; wide layout:
+  from 230–270° above 10 Hz.
+
+The only frequencies whose bracket is both finite and within ten apertures
+of wavelength:
+
+| Layout | Frequency | Apparent velocity | Arrives from |
+|---|---|---|---|
+| 2026-09-25 | 9.6–14.7 Hz | 2170–2680 m/s, ±6 % | 126–130° |
+| 2026-10-01 wide | 14.7–17 Hz | 3600–4900 m/s, ±20 % | 252–272° |
+| 2026-10-01 compact | none | lower bounds of 1.8–9 km/s only | |
+
+Below these bands the wavelength is 10–100 apertures and the fit returns
+lower bounds only. Above about 20 Hz the coherency falls below 0.5 at
+every separation and the fit becomes unresolved or aliased.
+
+**These are apparent velocities, and an upper bound on the Rayleigh
+velocity.** A plane wave arriving steeply from below crosses the array at
+V/sin(i), faster than it travels. The 3.6–4.9 km/s at site A exceeds the
+rock's own P-wave velocity (3.38 km/s from the 2026-09-18 refraction line),
+so it cannot be a horizontally travelling surface wave; part of the field
+there arrives from below. The 2.2–2.7 km/s at site B is below that site's
+rock P-wave velocity (3.75 km/s) and could be a Rayleigh wave in the rock,
+but the data cannot exclude a steep body wave.
+
+### The hammer shots tell the same story
+
+For the shots nearest 101527 on 2026-09-25, the 15–40 Hz envelope reaches
+101525, 37 m away, only 8–24 ms later: well over 1.5 km/s. A surface wave in
+the 450 m/s layer would take 80 ms or more. At that range what reaches the
+far nodes is rock-guided.
+
+### Why the diagnostics needed fixing
+
+On these data the original `separation_test` said "SPAC assumptions hold
+over most of the band" for all three layouts, and `spac_dispersion` then
+returned a few stray points (500 m/s at 33 Hz; 760–920 m/s at 20–23 Hz).
+The tolerance on the per-separation velocity spread (0.35) is looser than
+the spread a 5.6–14 m array produces when the velocity simply scales with
+separation (about 0.3), so the test could not see the failure on a compact
+array. `separation_test` now also requires the slope of log velocity
+against log separation to stay below 0.5 (it is 1 for that failure,
+whatever the geometry). With that, both October 1 layouts fail outright,
+and September 25 is "valid only in part of the band", where
+`spac_dispersion` still refuses to produce a curve.
+
+## Why a 40 m array cannot reach Vs30 here
+
+The question is fair: Vs30 needs wavelengths up to roughly 40–90 m (depth
+sensitivity is about a third to a half of the wavelength), and a 5-node
+array with 6–34 m separations resolves wavelengths of about 12–100 m. On
+paper the array is the right size.
+
+What the array records, though, is frequency, and f = c/λ. At an ordinary
+soil site with c ≈ 300 m/s, λ = 40 m is 7 Hz — the heart of the ambient
+band — and the same array works. Here the forward model for site B (1.7 m
+of soil at Vs ≈ 220 m/s over rock at Vs ≈ 2 km/s, from the 2026-09-25
+refraction line) gives the fundamental Rayleigh mode as:
+
+| f (Hz) | c (m/s) | λ (m) |
+|---|---|---|
+| 10 | 1840 | 184 |
+| 20 | 1815 | 91 |
+| 30 | 1708 | 57 |
+| 40 | 646 | 16 |
+| 60 | 374 | 6 |
+
+At site B, every wavelength that carries the Vs30 information, about
+6–60 m, sits between 30 and 60 Hz. Two things go wrong there:
+
+1. **The ambient field does not correlate at those frequencies.** Coherency
+   is below 0.5 at every separation above about 20 Hz on all three layouts.
+   The energy there comes from nearby sources and dies within metres.
+2. **The curve is nearly vertical.** Velocity triples between 30 and 40 Hz.
+   A frequency-by-frequency method cannot place points on it, and the
+   energy tends to show up in higher modes.
+
+Where the ambient field *is* coherent, 3–20 Hz, the rock pushes the
+wavelength to 90–600 m, which is what a 34 m array can bound from below
+but not measure. That is the sense in which "rock velocity needs a
+hundreds-of-metres array" — it applies to the frequencies the noise
+actually supplies, not to Vs30 in general.
+
+And Vs30 itself is decided by the rock here: the model gives
+30 / (1.7/220 + 28.3/2000) ≈ 1370 m/s, Vs30 class B. The refraction
+P-wave velocity with an assumed Vp/Vs ratio pins that about as well as
+any passive measurement could.
+
+**Site A is the borderline case.** The 2026-09-18 refraction line gives
+6.2 m at Vp 958 m/s over 3380 m/s, and the Geode gives 265–276 m/s at
+39–60 Hz, so take a soil Vs of about 280 m/s. The fundamental mode then
+falls from about 1.2 km/s at 12 Hz to 560 m/s at 20 Hz and 290 m/s at
+30 Hz (λ 100 → 28 → 10 m), and Vs30 comes out near 850 m/s. Here the
+soil's branch does overlap the coherent band and the array's wavelength
+range. But at 14–20 Hz both October 1 layouts measure 1.7–2.6 km/s with a
+single plane wave explaining all the coherency: the fast arrivals swamp the
+fundamental mode, and five nodes cannot separate two waves at once. Only at
+22–25 Hz does the compact layout hint at 400–800 m/s, and those bins are
+flagged aliased with brackets reaching down to the search floor. A tighter
+array (1–5 m separations) aimed at 20–30 Hz is the one passive experiment
+left that could reach the soil at site A; at site B there is none.
+
+## What would work
 
 - **A 2-D layout, not a line.** A line cannot resolve the arrival azimuth, and
   a wavefield arriving broadside gives near-zero phase difference across every
@@ -201,6 +396,12 @@ depths need, azimuths spread by the golden angle so no two stations line up.
   fits a Bessel function.
 - **Check coherency before pulling the nodes.** Ten minutes of computation in
   the field, against a repeat visit.
+- **Know what the ground is before choosing passive.** Thin soil over hard
+  rock — site B here — puts the soil band above 30 Hz, out of reach of
+  ambient noise at any array size; a few metres over rock — site A — leaves
+  the soil band under a much stronger rock-guided field. A refraction line first, which is cheap
+  and was done here anyway, says whether passive can work at all.
+- **Tape the layout.** GPS-only positions cost 20–50 % on short separations.
 - **For active shear wave, use the Geode, not the nodes** — 24 channels beats
   5, and the only change needed is a longer record. A 1 s record on a 24-channel
   spread at 4 m spacing (92 m long) resolves wavelengths of 8–90 m, so depths of
@@ -209,9 +410,21 @@ depths need, azimuths spread by the golden angle so no two stations line up.
 
 ## Status in the repo
 
-The zip stays in the git-ignored `data/`. It has **not** been promoted to
+Both zips stay in the git-ignored `data/`. It has **not** been promoted to
 `examples/data/`: the bar there is a coherent survey with every known problem
 written down, and while the problems are now written down, the September line
-cannot deliver the result the example would exist to demonstrate. Worth
-revisiting if a circular-array deployment is collected at the same site — June
-plus a new circle at site A would make a genuinely good teaching dataset.
+cannot deliver the result the example would exist to demonstrate. The
+October 2-D data were the deployment that was to be revisited for; they are
+clean and well-designed, and they show that the limitation is the site
+rather than the array. They are a good teaching dataset for *why* passive
+fails over shallow rock — the plane-wave fit makes the point directly — but
+not for a passive Vs profile.
+
+Tools added for this analysis: `drivers.atom_atm.split_layouts`,
+`passive.plane_wave_fit` (also takes `events=` for transients on a 2-D
+array), and the log-log velocity slope in `passive.separation_test`.
+`notebooks/passive_shear_wave_colab.ipynb` now works per layout rather than
+per field day, adds the plane-wave fit as step 5b, and on a 2-D array takes
+its dispersion points from that fit — showing them, but inverting them only
+if `INVERT_APPARENT` is set, since over rock they are the rock's apparent
+velocity rather than the soil's.

@@ -542,3 +542,204 @@ def test_suggest_array_spreads_azimuths():
 def test_suggest_array_refuses_too_few_nodes():
     with pytest.raises(ValueError, match="at least 4 nodes"):
         P.suggest_array(3)
+
+
+# -- compact arrays: velocity tracking separation ---------------------------
+
+# The 2026-10-01 compact layout: ten pairs spanning only a factor of 2.5.
+COMPACT_DISTANCES = np.array([5.6, 5.9, 6.0, 7.8, 7.8, 8.4, 9.1, 12.8, 13.5, 14.2])
+
+
+def _spac_result(distances, coherency, frequency):
+    pairs = pd.DataFrame({
+        "node_a": [f"a{i}" for i in range(len(distances))],
+        "node_b": [f"b{i}" for i in range(len(distances))],
+        "distance": distances,
+    })
+    return P.SpacResult(
+        frequency=frequency, distance=distances, coherency=coherency,
+        coherency_abs=np.abs(coherency), phase=np.zeros_like(coherency),
+        pairs=pairs, n_windows=100, n_windows_rejected=0,
+    )
+
+
+def test_separation_test_rejects_velocity_tracking_r_on_a_compact_array():
+    """A wavelength far beyond the aperture, seen through incoherent noise.
+
+    J0 barely departs from 1 across 14 m, so the 15 % incoherent deficit is
+    the same at every separation and inverts to c proportional to r. On a
+    geometry spanning a factor of only 2.5 the per-ring spread of that is
+    about 0.3, inside the 0.35 tolerance -- so the spread test alone passes
+    it. The log-log slope does not care about the geometry.
+    """
+    from scipy.special import j0
+
+    frequency = np.linspace(3.0, 10.0, 30)
+    rho = 0.85 * j0(2 * np.pi * frequency[None, :] * COMPACT_DISTANCES[:, None] / 5000.0)
+    result = _spac_result(COMPACT_DISTANCES, rho, frequency)
+
+    lenient = P.separation_test(result, max_velocity_slope=np.inf)
+    assert lenient.usable.mean() > 0.5, "the spread test alone should be fooled"
+
+    strict = P.separation_test(result)
+    assert np.nanmedian(strict.velocity_slope) > 0.8
+    assert strict.usable.mean() < 0.15
+    assert "fail" in strict.verdict
+
+
+def test_velocity_slope_is_flat_for_a_real_wavefield():
+    from scipy.special import j0
+
+    # 3-6 Hz at 250 m/s keeps every pair on the first lobe of J0.
+    frequency = np.linspace(3.0, 6.0, 30)
+    rho = j0(2 * np.pi * frequency[None, :] * COMPACT_DISTANCES[:, None] / 250.0)
+    test = P.separation_test(_spac_result(COMPACT_DISTANCES, rho, frequency))
+    finite = np.isfinite(test.velocity_slope)
+    assert finite.any()
+    assert np.abs(test.velocity_slope[finite]).max() < 0.1
+
+
+# -- plane-wave fit on a 2-D array -------------------------------------------
+
+# Five nodes, log-spaced radii and golden-angle azimuths, ~4-35 m separations.
+ARRAY_2D = P.suggest_array(5, depth_min=2.0, depth_max=20.0)
+
+
+def make_survey_2d(east, north, data, *, start="2026-10-01 16:00:00"):
+    ids = [f"n{i}" for i in range(len(east))]
+    lat0, lon0 = 37.925, -91.7766
+    geometry = Geometry(
+        ids=ids,
+        x=[lon0 + e / (METRE_PER_DEGREE * np.cos(np.radians(lat0))) for e in east],
+        y=[lat0 + n / METRE_PER_DEGREE for n in north],
+        z=[330.0] * len(ids),
+        roles=["receiver"] * len(ids),
+        spatial_ref=WGS84,
+    )
+    return SeismicSurvey(
+        data=np.asarray(data, dtype=float),
+        sample_interval=1.0 / FS,
+        geometry=geometry,
+        trace_map=pd.DataFrame({"receiver_id": ids, "channel": "Z"}),
+        start_time=pd.Timestamp(start, tz="UTC"),
+    )
+
+
+def directional_wave(east, north, *, velocity, from_azimuth, seconds=300.0,
+                     local_noise=0.3, seed=11):
+    """Broadband noise arriving from one direction, plus node-local noise."""
+    rng = np.random.default_rng(seed)
+    n = int(seconds * FS)
+    freqs = np.fft.rfftfreq(n, 1.0 / FS)
+    spectrum = np.fft.rfft(rng.normal(size=n))
+    spectrum[(freqs < 2.0) | (freqs > 25.0)] = 0.0
+    heading = np.radians(from_azimuth + 180.0)
+    delay = (np.asarray(east) * np.sin(heading) + np.asarray(north) * np.cos(heading)) / velocity
+    out = np.array([
+        np.fft.irfft(spectrum * np.exp(-2j * np.pi * freqs * d), n=n) for d in delay
+    ])
+    return out + local_noise * out.std() * rng.normal(size=out.shape)
+
+
+def _east_north(survey):
+    layout = P.array_layout(survey)
+    return layout.east, layout.north
+
+
+def test_plane_wave_fit_recovers_velocity_and_direction():
+    east, north = ARRAY_2D["east"].to_numpy(), ARRAY_2D["north"].to_numpy()
+    survey = make_survey_2d(
+        east, north, directional_wave(east, north, velocity=250.0, from_azimuth=60.0)
+    )
+    fit = P.plane_wave_fit(survey, [4.0, 6.0, 8.0, 10.0], position_error=0.05)
+    t = fit.table
+    assert t["resolved"].all()
+    assert not t["aliased"].any()
+    assert ((t["velocity_min"] <= 250.0 * 1.03) & (t["velocity_max"] >= 250.0 * 0.97)).all()
+    assert np.median(t["velocity"]) == pytest.approx(250.0, rel=0.03)
+    error = (t["azimuth"] - 60.0 + 180.0) % 360.0 - 180.0
+    assert np.abs(error).max() < 5.0
+    assert t["single_wave"].min() > 0.95, "one plane wave should explain it all"
+
+    curve = fit.to_curve()
+    assert curve.n_points == 4
+    assert np.median(curve.velocity) == pytest.approx(250.0, rel=0.03)
+
+
+def test_position_error_widens_the_bracket():
+    east, north = ARRAY_2D["east"].to_numpy(), ARRAY_2D["north"].to_numpy()
+    survey = make_survey_2d(
+        east, north, directional_wave(east, north, velocity=250.0, from_azimuth=60.0)
+    )
+    taped = P.plane_wave_fit(survey, [6.0], position_error=0.05).table.iloc[0]
+    gps = P.plane_wave_fit(survey, [6.0], position_error=3.0).table.iloc[0]
+
+    def width(row):
+        return row["velocity_max"] - row["velocity_min"]
+
+    assert width(gps) > 3 * width(taped)
+
+
+def test_long_wavelength_is_a_lower_bound_not_a_curve():
+    """Fast ground under a compact array: the 2026 situation.
+
+    At 3 km/s and 4 Hz the wavelength is 750 m, some fifty times this
+    aperture. The fit may well pin a velocity statistically, but it must not
+    be handed on as a dispersion curve.
+    """
+    east, north = ARRAY_2D["east"].to_numpy() / 2, ARRAY_2D["north"].to_numpy() / 2
+    survey = make_survey_2d(
+        east, north, directional_wave(east, north, velocity=3000.0, from_azimuth=120.0)
+    )
+    fit = P.plane_wave_fit(survey, [3.0, 4.0, 5.0])
+    t = fit.table
+    assert (t["wavelength_over_aperture"] > 10).all()
+    assert (t["velocity_min"] > 1000.0).all(), "the lower bound is the information"
+    with pytest.raises(ValueError, match="apertures"):
+        fit.to_curve()
+
+
+def test_common_mode_noise_has_no_finite_velocity():
+    """Identical signal at every node: zero slowness, no velocity at all.
+
+    The fit is statistical, so at any one frequency the 68 % bracket can
+    miss infinity by a whisker. What must hold is that only a lower bound in
+    the km/s range comes back, and that none of it becomes a curve.
+    """
+    east, north = ARRAY_2D["east"].to_numpy(), ARRAY_2D["north"].to_numpy()
+    rng = np.random.default_rng(12)
+    shared = rng.normal(size=int(300 * FS))
+    data = np.tile(shared, (len(east), 1)) + 0.3 * rng.normal(size=(len(east), shared.size))
+    fit = P.plane_wave_fit(make_survey_2d(east, north, data), [4.0, 6.0, 8.0, 10.0, 12.0])
+    t = fit.table
+    assert (t["velocity_min"] > 2000.0).all()
+    assert np.isinf(t["velocity_max"]).sum() >= 3
+    with pytest.raises(ValueError):
+        fit.to_curve()
+
+
+def test_plane_wave_fit_on_transients():
+    """The 2-D counterpart of the event image: vehicles from one side."""
+    east, north = ARRAY_2D["east"].to_numpy(), ARRAY_2D["north"].to_numpy()
+    rng = np.random.default_rng(13)
+    fs, n = int(FS), int(200 * FS)
+    data = 0.02 * rng.normal(size=(len(east), n))
+    for onset in (30, 80, 130, 170):
+        burst = np.zeros(n)
+        burst[onset * fs:(onset + 4) * fs] = rng.normal(size=4 * fs) * np.hanning(4 * fs)
+        freqs = np.fft.rfftfreq(n, 1.0 / FS)
+        spectrum = np.fft.rfft(burst)
+        spectrum[(freqs < 4.0) | (freqs > 25.0)] = 0.0
+        heading = np.radians(300.0 + 180.0)
+        for i, (e, nn) in enumerate(zip(east, north, strict=True)):
+            d = (e * np.sin(heading) + nn * np.cos(heading)) / 220.0
+            data[i] += np.fft.irfft(spectrum * np.exp(-2j * np.pi * freqs * d), n=n)
+
+    survey = make_survey_2d(east, north, data)
+    events = P.detect_events(survey, window=4.0, threshold=3.0, band=(4.0, 25.0))
+    assert len(events) >= 4
+    fit = P.plane_wave_fit(survey, [6.0, 8.0, 10.0], events=events, position_error=0.05)
+    assert fit.metadata["source"] == "events"
+    assert np.median(fit.table["velocity"]) == pytest.approx(220.0, rel=0.05)
+    error = (fit.table["azimuth"] - 300.0 + 180.0) % 360.0 - 180.0
+    assert np.abs(error).max() < 8.0

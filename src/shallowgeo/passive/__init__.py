@@ -19,12 +19,18 @@ The workflow, and the module that owns each step:
 ``events``
     Passive MASW, for sites where the ambient field is too weak but passing
     traffic is not.
+``planewave``
+    Velocity *and* direction per frequency from a 2-D array, for when the
+    noise comes mostly from one side and SPAC's azimuthal average fails. It
+    reports a velocity bracket, because a compact array over fast ground
+    often bounds the velocity from below and no more.
 
-Which of the two dispersion routes applies is a property of the recording,
-not a preference. Run the diagnostics first: a quiet site with a strong road
-wants ``events``, a noisy urban site with a compact array wants ``spac``, and
-a site that offers neither is worth knowing about before a Vs profile gets
-built on top of it.
+Which dispersion route applies is a property of the recording, not a
+preference. Run the diagnostics first: a quiet site with a strong road wants
+``events``, a noisy urban site with a compact array wants ``spac``, a 2-D
+array under one dominant source wants ``planewave``, and a site that offers
+none of them is worth knowing about before a Vs profile gets built on top
+of it.
 """
 
 from .deployment import (
@@ -44,6 +50,7 @@ from .events import (
     shot_windows,
     two_station_dispersion,
 )
+from .planewave import PlaneWaveFit, plane_wave_fit
 from .spac import (
     SeparationTest,
     SpacResult,
@@ -54,11 +61,13 @@ from .spac import (
     spac_coherency,
     spac_dispersion,
     wavelength_test,
+    window_spectra,
 )
 
 __all__ = [
     "ArrayLayout",
     "EventWindow",
+    "PlaneWaveFit",
     "ResolutionLimits",
     "SeparationTest",
     "SpacResult",
@@ -69,6 +78,7 @@ __all__ = [
     "event_dispersion_image",
     "konno_ohmachi",
     "node_coverage",
+    "plane_wave_fit",
     "resolution_limits",
     "separation_rings",
     "separation_test",
@@ -79,4 +89,5 @@ __all__ = [
     "trim",
     "two_station_dispersion",
     "wavelength_test",
+    "window_spectra",
 ]
