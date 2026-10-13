@@ -116,7 +116,12 @@ checks `provenance.applied()` and refuses to double-apply.
       (they agree to ~6 % on the 2026-09-25 line). Still to do: project
       onto the canonical grid (Milestone 4) and topography from surveyed
       elevations in the notebooks.
-- [ ] Gravity, magnetics → SimPEG `potential_fields`
+- [x] 2-D gravity and magnetics in `shallowgeo.potentialfields`: closed-form
+      prism kernels (induced magnetisation), depth-weighted Tikhonov inversion
+      with β by the discrepancy principle, bounds (L-BFGS-B), and compact
+      (minimum-support) inversion, used by
+      `notebooks/gravity_magnetics_tunnel.ipynb`. NumPy/SciPy only.
+- [ ] Gravity, magnetics → SimPEG `potential_fields` (3-D)
 - [ ] Surface wave → `disba` / `evodcinv` 1D, projected onto the canonical grid
 
 ## Milestone 6 — joint modeling (Layer 3)
