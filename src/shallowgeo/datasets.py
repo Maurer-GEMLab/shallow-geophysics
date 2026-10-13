@@ -57,7 +57,9 @@ def find_shot_files(source, *, extract_to: str | Path | None = None) -> list[Pat
         A folder (searched recursively), a ``.zip`` file, a single shot
         file, a glob pattern such as ``"raw/40*.sgy"``, or a list of any of
         these. Shot records are files ending in ``.dat``, ``.sgy``,
-        ``.segy`` or ``.sg2``.
+        ``.segy`` or ``.sg2``, in any case. A glob pattern is matched with
+        the operating system's case rules: ``"*.sgy"`` also finds ``.SGY``
+        files on Windows, but not on Linux or macOS.
     extract_to
         Where to unpack zip files. Default: a new temporary folder each.
 

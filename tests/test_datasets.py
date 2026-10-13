@@ -45,7 +45,9 @@ class TestFindShotFiles:
         assert names == ["1001.sgy", "1002.SGY", "1003.dat"]
 
     def test_glob_single_file_and_lists(self, line):
-        assert [p.name for p in find_shot_files(str(line / "100*.sgy"))] == ["1001.sgy"]
+        # Not "100*.sgy": glob follows the OS's case rules, and on Windows
+        # that would also match 1002.SGY.
+        assert [p.name for p in find_shot_files(str(line / "100*"))] == ["1001.sgy", "1002.SGY"]
         assert len(find_shot_files(line / "1002.SGY")) == 1
         assert len(find_shot_files([line / "1001.sgy", line / "sub"])) == 2
 
