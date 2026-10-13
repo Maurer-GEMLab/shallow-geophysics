@@ -499,7 +499,7 @@ class TestGeodeSEGYMultiRecord:
             read(segy_file_two_records[0], source_offset=0.0)
 
     def test_mismatched_spreads_are_refused(self, tmp_path):
-        from tests.segy_writer import write_segy
+        from segy_writer import write_segy
 
         a, b = tmp_path / "_a.sgy", tmp_path / "_b.sgy"
         write_segy(a, np.zeros((6, 32)), 0.0005,
