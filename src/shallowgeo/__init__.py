@@ -22,6 +22,7 @@ from . import (
     core,
     datasets,
     drivers,
+    magnetics,
     positions,
     potentialfields,
     refraction,
@@ -42,8 +43,8 @@ from .positions import PositionTable, read_positions
 __version__ = "0.0.1.dev0"
 
 __all__ = [
-    "core", "datasets", "drivers", "positions", "potentialfields", "refraction",
-    "surfacewave",
+    "core", "datasets", "drivers", "magnetics", "positions", "potentialfields",
+    "refraction", "surfacewave",
     "read", "identify",
     "read_positions", "PositionTable",
     "Geometry", "SpatialRef", "local_grid", "Provenance",

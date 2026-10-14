@@ -65,9 +65,36 @@ def test_magnetic_anomaly_shape():
     t = magnetic_kernel(mesh, xs, 1.0, inclination=64.0, profile_azimuth=0.0)[:, 0]
     assert xs[np.argmax(t)] < 0 < xs[np.argmin(t)]
     assert t.min() < 0
-    # Profile along the field's strike: only the vertical part of the field counts.
+    # Profile west to east across a north-south body: the northward part of the
+    # field lies along strike, so only the vertical part counts.
     t_ew = magnetic_kernel(mesh, xs, 1.0, inclination=64.0, profile_azimuth=90.0)[:, 0]
     np.testing.assert_allclose(t_ew, t_ew[::-1], atol=1e-9)
+
+
+@pytest.mark.parametrize("azimuth", [0.0, 90.0, 30.0])
+def test_magnetic_kernel_matches_long_3d_prism(azimuth):
+    """Independent of the 2-D algebra: sum 3-D point dipoles over a prism
+    running 2 km each way along strike, with the strike set by the azimuth."""
+    cell, h, field = ((-2.0, 2.0), (4.0, 7.0)), 1.0, 52_000.0
+    xs = np.linspace(-15, 15, 7)
+    f = np.array(field_direction(64.0, 0.0, azimuth))
+    t = magnetic_kernel(Mesh2D(*cell), xs, h, inclination=64.0, profile_azimuth=azimuth)[:, 0]
+
+    d = 0.25
+    xc = np.arange(cell[0][0] + d / 2, cell[0][1], d)
+    zc = np.arange(cell[1][0] + d / 2, cell[1][1], d)
+    half = np.r_[0, np.geomspace(0.05, 2000, 150)]
+    y_edges = np.r_[-half[:0:-1], half]
+    yc, dy = 0.5 * (y_edges[1:] + y_edges[:-1]), np.diff(y_edges)
+    X, Z, Y = np.meshgrid(xc, zc, yc, indexing="ij")
+    dV = d * d * dy
+    ref = []
+    for x in xs:
+        r = np.stack([X - x, Y, Z + h])
+        R = np.sqrt(np.sum(r**2, axis=0))
+        fr = np.tensordot(f, r, 1) / R
+        ref.append(np.sum(field / (4 * np.pi) * (3 * fr**2 - 1) / R**3 * dV))
+    np.testing.assert_allclose(t, ref, atol=2e-3 * np.abs(ref).max())
 
 
 def test_field_direction_is_unit():
@@ -138,3 +165,15 @@ def test_bounds_and_compact(tunnel):
     inside = mesh.core(-15, 15, 12)
     true_mass = np.sum(model * mesh.area)
     assert np.sum((compact.model * mesh.area)[inside]) == pytest.approx(true_mass, rel=0.25)
+
+
+def test_inversion_reports_data_it_cannot_use(tunnel):
+    mesh, G, data, std, _ = tunnel
+    # Wrong-sign bounds: no model fits, so say so rather than search forever.
+    inv = LinearInversion(mesh, G, data, std, weighting="gravity", z0=0.2)
+    with pytest.raises(ValueError, match="sign of the bounds"):
+        inv.solve(bounds=(0.0, 2.65))
+    # Data already within their noise of zero: there is no beta to find.
+    quiet = LinearInversion(mesh, G, 0.1 * std * np.ones(data.size), std)
+    with pytest.raises(ValueError, match="nothing to invert"):
+        quiet.solve()
