@@ -273,6 +273,9 @@ class LinearInversion:
         b0 = np.log10(self.target_beta())
         lo_b, hi_b = b0 - 1, b0 + 1
         while misfit(lo_b) > 0:
+            if lo_b < b0 - 6:
+                raise ValueError("no model within these bounds fits the data to their "
+                                 "noise; check the sign of the bounds")
             lo_b -= 1
         while misfit(hi_b) < 0:
             hi_b += 1
@@ -340,6 +343,9 @@ class LinearInversion:
     def target_beta(self, chi2: float = 1.0) -> float:
         """The ``beta`` at which the unbounded model has ``phi_d = chi2 * n_data``."""
         target = chi2 * self.n_data
+        if np.sum((self.data / self.std) ** 2) <= target:
+            raise ValueError("the data are within their noise of zero, so the zero "
+                             "model already fits them; there is nothing to invert")
         if self.phi_d(self._unbounded(1e-12 * self._scale())) > target:
             raise ValueError("the data cannot be fit to their noise even with almost "
                              "no regularisation; check std")

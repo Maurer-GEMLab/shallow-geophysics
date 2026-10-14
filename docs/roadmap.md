@@ -83,6 +83,16 @@ checks `provenance.applied()` and refuses to double-apply.
 - [ ] Gravity: drift (from repeat base occupations), Longman tide, latitude,
       free-air, Bouguer slab, terrain
 - [ ] Magnetics: diurnal from base station, IGRF regional removal
+- [x] Magnetics: diurnal correction from base-station re-occupations
+      (`magnetics.diurnal_correction`, by time, or by reading order when a
+      table has no times)
+- [x] Magnetics: per-station summary tables (`mag-summary` driver: mean,
+      repeat std, correction, leveled, optional time; `diurnal="file" |
+      "remove" | "base"` and `base_station=` choose the correction),
+      constant-regional removal, and plots
+      (`shallowgeo.magnetics`: profiles, plan-view stacked profiles, contour
+      map, per-line corrections, repeat-reading QC), used by
+      `notebooks/magnetics_field_data.ipynb`
 - [x] Seismic: first-break picking (`refraction.pick_first_breaks`: AIC,
       MER, STA/LTA) with `plot_picks` for checking by eye
 - [x] Seismic: hand correction of picks across a whole line

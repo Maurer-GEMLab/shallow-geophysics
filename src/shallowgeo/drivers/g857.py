@@ -43,6 +43,8 @@ from ..core.crs import SpatialRef, local_grid
 from ..core.geometry import Geometry
 from ..core.survey import PointSurvey
 from .base import Driver, _sniff_text
+from .mag_summary import _header as _summary_header
+from .mag_summary import _is_summary_header
 
 #: Named column layouts, selectable as ``columns="manual"``.
 LAYOUTS: dict[str, list[str]] = {
@@ -150,6 +152,10 @@ def _is_g857(path: Path) -> bool:
     if "G-857" in text or "G857" in text:
         return True
     if "CG-5" in text:  # a CG-5 dump is also plain numeric ASCII
+        return False
+    if _is_summary_header(_summary_header(lines)):
+        # A per-station summary (mean, std, correction) has plausible field
+        # values too, but no reading times; the mag-summary driver reads it.
         return False
     if _header_columns(lines):
         return True

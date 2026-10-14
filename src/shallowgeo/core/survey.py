@@ -233,7 +233,9 @@ class PointSurvey(Survey):
             raise ValueError(f"readings missing column(s): {sorted(missing)}")
         readings = readings.copy()
         readings["time"] = pd.to_datetime(readings["time"])
-        self.readings = readings.sort_values("time").reset_index(drop=True)
+        # Stable, so readings without times (a reduced station table) keep
+        # the file's order.
+        self.readings = readings.sort_values("time", kind="stable").reset_index(drop=True)
         self.quantity = quantity
         self.units = units
 
