@@ -19,6 +19,9 @@ The workflow, and the module that owns each step:
 ``events``
     Passive MASW, for sites where the ambient field is too weak but passing
     traffic is not.
+``layouts``
+    Standard array shapes (circle, triangle, L) at a given scale, and a fit
+    that lines one up with the nodes' GPS to replace it with exact positions.
 ``planewave``
     Velocity *and* direction per frequency from a 2-D array, for when the
     noise comes mostly from one side and SPAC's azimuthal average fails. It
@@ -50,6 +53,7 @@ from .events import (
     shot_windows,
     two_station_dispersion,
 )
+from .layouts import SHAPES, TemplateFit, array_template, fit_template
 from .planewave import PlaneWaveFit, plane_wave_fit
 from .spac import (
     SeparationTest,
@@ -69,13 +73,17 @@ __all__ = [
     "EventWindow",
     "PlaneWaveFit",
     "ResolutionLimits",
+    "SHAPES",
     "SeparationTest",
     "SpacResult",
+    "TemplateFit",
     "WavelengthTest",
     "array_layout",
+    "array_template",
     "common_window",
     "detect_events",
     "event_dispersion_image",
+    "fit_template",
     "konno_ohmachi",
     "node_coverage",
     "plane_wave_fit",
