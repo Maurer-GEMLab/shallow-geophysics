@@ -48,6 +48,9 @@ from .deployment import ArrayLayout, array_layout
 
 #: First zero of J0. Past this the Bessel inversion stops being single-valued.
 J0_FIRST_ZERO = 2.404825557695773
+#: First minimum of J0 (J0 = -0.40), at r/lambda = 0.61. A multi-lobe fit needs
+#: its closest ring inside it to know which lobe the others are on.
+J0_FIRST_MINIMUM = 3.8317059702075125
 
 
 def konno_ohmachi(frequency: np.ndarray, values: np.ndarray, b: float = 40.0):
@@ -82,6 +85,11 @@ class SpacResult:
     assumptions. ``coherency_abs`` and ``phase`` are kept because they are how
     the assumptions get tested: a propagating field on a line array shows a
     phase that grows with frequency, a broadside or common-mode one does not.
+
+    ``coherency_imag`` is the imaginary part, smoothed exactly as the real
+    part is. Under the SPAC assumptions it averages to zero; a directional
+    field leaves it large. ``None`` on results built by hand, in which case
+    it is recomputed (unsmoothed) from ``coherency_abs`` and ``phase``.
     """
 
     frequency: np.ndarray
@@ -93,6 +101,14 @@ class SpacResult:
     n_windows: int
     n_windows_rejected: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    coherency_imag: np.ndarray | None = None
+
+    @property
+    def imaginary(self) -> np.ndarray:
+        """Imaginary part of the coherency, ``(n_pairs, n_freq)``."""
+        if self.coherency_imag is not None:
+            return self.coherency_imag
+        return self.coherency_abs * np.sin(self.phase)
 
     def at(self, frequency: float) -> pd.DataFrame:
         """Coherency of every pair at the nearest frequency bin."""
@@ -205,15 +221,17 @@ def spac_coherency(
 
     power = np.mean(np.abs(spectra) ** 2, axis=1)
     pairs = layout.separations
-    real, absolute, phase = [], [], []
+    real, imaginary, absolute, phase = [], [], [], []
     for _, row in pairs.iterrows():
         i, j = int(row["index_a"]), int(row["index_b"])
         cross = np.mean(spectra[i] * np.conj(spectra[j]), axis=0)
         gamma = cross / np.sqrt(power[i] * power[j] + 1e-30)
-        rho = np.real(gamma)
+        rho, rho_imag = np.real(gamma), np.imag(gamma)
         if smoothing:
             rho = konno_ohmachi(freqs, rho, smoothing)
+            rho_imag = konno_ohmachi(freqs, rho_imag, smoothing)
         real.append(rho)
+        imaginary.append(rho_imag)
         absolute.append(np.abs(gamma))
         phase.append(np.angle(gamma))
 
@@ -232,6 +250,7 @@ def spac_coherency(
             "anti_trigger": anti_trigger,
             "smoothing": smoothing,
         },
+        coherency_imag=np.array(imaginary),
     )
 
 
@@ -262,6 +281,13 @@ class SeparationTest:
     than the array -- the small deficit below 1 that :math:`J_0` produces is
     then swamped by the incoherent-noise deficit, which is the same at every
     separation and so again inverts to ``c`` proportional to ``r``.
+
+    All three of those are first-lobe tests, and they are blind past the
+    first zero of :math:`J_0`, where the coherency legitimately *rises* again
+    with separation. ``multi_lobe`` covers that band separately: see
+    :func:`separation_test`. ``usable`` is ``first_lobe | multi_lobe``, and
+    ``multi_lobe_velocity`` is the joint-fit velocity at the frequencies
+    where the multi-lobe test passed (``NaN`` elsewhere).
     """
 
     frequency: np.ndarray
@@ -271,6 +297,9 @@ class SeparationTest:
     verdict: str
     usable: np.ndarray
     velocity_slope: np.ndarray | None = None
+    first_lobe: np.ndarray | None = None
+    multi_lobe: np.ndarray | None = None
+    multi_lobe_velocity: np.ndarray | None = None
 
     def summary(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -279,6 +308,9 @@ class SeparationTest:
                 "slope_per_m": self.slope,
                 "velocity_ratio": self.velocity_ratio,
                 "velocity_slope": self.velocity_slope,
+                "first_lobe": self.first_lobe,
+                "multi_lobe": self.multi_lobe,
+                "multi_lobe_velocity": self.multi_lobe_velocity,
                 "usable": self.usable,
             }
         )
@@ -312,13 +344,24 @@ def separation_test(
     tolerance: float = 0.35,
     ring_tolerance: float = 0.05,
     max_velocity_slope: float = 0.5,
+    multi_lobe: bool = True,
+    min_rings: int = 3,
+    max_residual: float = 0.10,
+    min_amplitude: float = 0.3,
+    min_negative: float = 0.15,
+    max_inner_ratio: float = J0_FIRST_MINIMUM / (2.0 * np.pi),
+    min_uniqueness: float = 1.5,
+    max_imaginary_ratio: float = 0.6,
+    vmin: float = 50.0,
+    vmax: float = 3000.0,
+    dv: float = 2.0,
 ) -> SeparationTest:
     """Test the SPAC assumptions against the measured coherency.
 
-    A frequency is usable when the coherency falls with separation, two or
-    more distinct separations invert to the same velocity, and those
-    velocities do not climb with separation (``velocity_slope`` below
-    ``max_velocity_slope``; see :class:`SeparationTest`).
+    A frequency is usable on the **first lobe** when the coherency falls with
+    separation, two or more distinct separations invert to the same velocity,
+    and those velocities do not climb with separation (``velocity_slope``
+    below ``max_velocity_slope``; see :class:`SeparationTest`).
 
     Requiring **distinct separations**, rather than simply two pairs, is what
     makes the test mean anything. Past the first zero of :math:`J_0` the
@@ -329,7 +372,35 @@ def separation_test(
     own second lobe falls elsewhere, disagrees and gives the error away.
 
     So a frequency at which only one ring of the array still inverts is
-    reported unusable, however tidy its numbers look.
+    reported unusable by the first-lobe test, however tidy its numbers look.
+
+    **Past the first zero** that test cannot work: the coherency there is
+    *supposed* to rise again with separation. With ``multi_lobe`` (the
+    default) such a frequency is usable instead when the joint fit
+    :math:`A J_0(2 \\pi f r / c)` over the ring-averaged coherency of at least
+    ``min_rings`` distinct separations satisfies all of:
+
+    - residual at most ``max_residual`` and ``A`` at least ``min_amplitude``:
+      the Bessel shape actually fits, and most of the coherency is in it;
+    - some ring at or below ``-min_negative``. This is the decisive one. A
+      flat or common-mode coherency, or a wave too fast for the array, is
+      positive at every separation; only a wavelength comparable to the
+      separations can drive it negative;
+    - the closest ring no further out than ``max_inner_ratio`` wavelengths,
+      by default the first *trough* of :math:`J_0` (r/lambda = 0.61). Rings
+      that all sit further out sample only the decaying tail of the Bessel
+      function, which is nearly periodic in ``r``, and several lobes then
+      fit about equally well (2026-10-01 wide layout, 24-26 Hz);
+    - no velocity more than 20 % away fitting within a factor
+      ``min_uniqueness`` of the best residual, for the same reason;
+    - an imaginary part small against the real part (rms ratio at most
+      ``max_imaginary_ratio``). Isotropic noise averages the imaginary part
+      away. A single directional plane wave does not, and it can drive
+      aligned pairs negative through :math:`\\cos(k \\cdot \\Delta x)` --
+      which is what the 1.6 km/s field at 19-21 Hz on 2026-09-25 does.
+
+    ``vmin``, ``vmax`` and ``dv`` set the velocity search for that fit; a
+    best fit on either edge is not accepted.
     """
     distances = result.distance
     if distances.size < 2:
@@ -371,9 +442,44 @@ def separation_test(
             trends.append(np.nan)
 
     slopes, ratios, trends = np.array(slopes), np.array(ratios), np.array(trends)
-    usable = (slopes < 0) & (ratios < tolerance) & (trends < max_velocity_slope)
+    first_lobe = (slopes < 0) & (ratios < tolerance) & (trends < max_velocity_slope)
 
-    fraction = float(np.nanmean(usable)) if usable.size else 0.0
+    lobes = np.zeros_like(first_lobe)
+    lobe_velocity = np.full(result.frequency.size, np.nan)
+    if multi_lobe and n_rings >= min_rings:
+        trial = np.arange(vmin, vmax + dv / 2, dv)
+        imaginary = result.imaginary
+        for k, f in enumerate(result.frequency):
+            ring_rho = np.array(
+                [result.coherency[rings == ring, k].mean() for ring in range(n_rings)]
+            )
+            # Cheap test first: without a clearly negative ring there is
+            # nothing here that a flat or fast field could not also produce.
+            if f <= 0 or not np.isfinite(ring_rho).all() or ring_rho.min() > -min_negative:
+                continue
+            amplitude, residual = _bessel_misfit(f, ring_distance, ring_rho, trial)
+            best = int(np.argmin(residual))
+            c = trial[best]
+            if best in (0, trial.size - 1):
+                continue                                    # pinned to the search edge
+            if residual[best] > max_residual or amplitude[best] < min_amplitude:
+                continue
+            if ring_distance.min() * f / c > max_inner_ratio:
+                continue
+            elsewhere = np.abs(trial / c - 1.0) > 0.2
+            if elsewhere.any() and (
+                residual[elsewhere].min() < min_uniqueness * max(residual[best], 1e-6)
+            ):
+                continue
+            real_rms = np.sqrt(np.mean(result.coherency[:, k] ** 2))
+            imag_rms = np.sqrt(np.mean(imaginary[:, k] ** 2))
+            if imag_rms > max_imaginary_ratio * real_rms:
+                continue
+            lobes[k] = True
+            lobe_velocity[k] = c
+    usable = first_lobe | lobes
+
+    fraction = float(np.nanmean(first_lobe)) if first_lobe.size else 0.0
     if fraction > 0.5:
         verdict = "SPAC assumptions hold over most of the band"
     elif fraction > 0.15:
@@ -383,6 +489,14 @@ def separation_test(
             "SPAC assumptions fail: coherency does not decay with separation, so "
             "the inverted velocity tracks station spacing rather than the ground"
         )
+    if lobes.any():
+        band = result.frequency[lobes]
+        verdict += (
+            f"; but {int(lobes.sum())} bins at {band.min():.1f}-{band.max():.1f} Hz "
+            "pass the multi-lobe Bessel test (coherency negative past the first "
+            f"zero of J0, c = {np.nanmin(lobe_velocity):.0f}-"
+            f"{np.nanmax(lobe_velocity):.0f} m/s)"
+        )
     return SeparationTest(
         frequency=result.frequency,
         slope=slopes,
@@ -391,6 +505,9 @@ def separation_test(
         verdict=verdict,
         usable=usable,
         velocity_slope=trends,
+        first_lobe=first_lobe,
+        multi_lobe=lobes,
+        multi_lobe_velocity=lobe_velocity,
     )
 
 
@@ -437,6 +554,15 @@ def wavelength_test(curve: DispersionCurve, *, threshold: float = 0.5) -> Wavele
     ``threshold`` is the lowest index treated as physical. Below roughly 0.5
     the wavelength is moving less than half as fast as it would over a uniform
     half-space, which no realistic velocity profile produces.
+
+    A curve spanning less than a factor of 1.5 in frequency is refused, not
+    passed: the index is meaningless there. That includes the short bands
+    that :func:`separation_test` accepts past the first zero of :math:`J_0`
+    (2026-10-01, 27-29 Hz). Those do not need this test -- a coherency that
+    changes sign across the rings at every frequency is not flat, which is
+    the failure this test exists to catch -- and :func:`spac_dispersion`
+    says so explicitly in the curve's ``wavelength_verdict`` rather than
+    reporting the curve as tested.
     """
     f, lam = curve.frequency, curve.wavelength
     good = np.isfinite(f) & np.isfinite(lam) & (f > 0) & (lam > 0)
@@ -453,7 +579,9 @@ def wavelength_test(curve: DispersionCurve, *, threshold: float = 0.5) -> Wavele
         raise ValueError(
             f"curve spans only a factor of {frequency_span:.2f} in frequency; "
             "at least 1.5 is needed to tell dispersion from a flat coherency. "
-            "Widen the picked band."
+            "Widen the picked band. (A short band that separation_test accepted "
+            "on the multi-lobe criterion is already known not to be flat; "
+            "spac_dispersion records that in the curve's metadata instead.)"
         )
     index = float(np.log(wavelength_span) / np.log(frequency_span))
 
@@ -522,6 +650,22 @@ def _fit_bessel(
     ``A`` is solved in closed form for each trial velocity, which leaves a
     one-dimensional search and makes this cheap enough to run per frequency.
     """
+    amplitude, residual = _bessel_misfit(frequency, distances, rho, velocities)
+    best = int(np.argmin(residual))
+    return float(velocities[best]), float(amplitude[best]), float(residual[best])
+
+
+def _bessel_misfit(
+    frequency: float,
+    distances: np.ndarray,
+    rho: np.ndarray,
+    velocities: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Best amplitude and rms residual of ``A * J0`` at every trial velocity.
+
+    The whole misfit curve, not just its minimum, because whether that
+    minimum is *unique* is what decides a multi-lobe fit.
+    """
     argument = 2.0 * np.pi * frequency * distances[None, :] / velocities[:, None]
     basis = j0(argument)                                  # (n_vel, n_ring)
     denominator = np.sum(basis * basis, axis=1)
@@ -533,8 +677,7 @@ def _fit_bessel(
     residual = np.sqrt(
         np.mean((amplitude[:, None] * basis - rho[None, :]) ** 2, axis=1)
     )
-    best = int(np.argmin(residual))
-    return float(velocities[best]), float(amplitude[best]), float(residual[best])
+    return amplitude, residual
 
 
 def spac_dispersion(
@@ -562,6 +705,14 @@ def spac_dispersion(
     With ``only_usable`` the frequencies that :func:`separation_test` rejected
     are dropped rather than returned with a large error bar, because their
     error is systematic rather than random.
+
+    Frequencies the test accepted only on its multi-lobe criterion -- past
+    the first zero of :math:`J_0` -- are inverted by the fit alone: the
+    point-wise route is first-lobe by construction and would return the
+    stable wrong answer described in :func:`separation_test`. The fit must
+    also land within 10 % of the velocity the test validated, so that a
+    narrower search here cannot quietly pick a different lobe. How many
+    points came in this way is ``metadata["multi_lobe_points"]``.
     """
     if method not in {"fit", "pointwise"}:
         raise ValueError(f"method must be 'fit' or 'pointwise', got {method!r}")
@@ -575,9 +726,17 @@ def spac_dispersion(
     )
     trial = np.arange(vmin, vmax + dv / 2, dv)
     frequencies, velocities, spreads, amplitudes = [], [], [], []
+    first_lobe = test.first_lobe if test.first_lobe is not None else test.usable
+    multi_lobe = (
+        test.multi_lobe if test.multi_lobe is not None else np.zeros_like(test.usable)
+    )
+    n_multi_lobe = 0
 
     for k, f in enumerate(result.frequency):
         if only_usable and not test.usable[k]:
+            continue
+        lobe_only = only_usable and bool(multi_lobe[k]) and not bool(first_lobe[k])
+        if lobe_only and method != "fit":
             continue
         ring_rho = np.array(
             [result.coherency[rings == ring, k].mean() for ring in range(n_rings)]
@@ -611,6 +770,10 @@ def spac_dispersion(
                 # beyond it even the closest pair is more than two lobes out,
                 # and there is not enough Bessel shape left to pin the lobe.
                 continue
+            if lobe_only:
+                if abs(c / test.multi_lobe_velocity[k] - 1.0) > 0.1:
+                    continue        # a different lobe from the one tested
+                n_multi_lobe += 1
             frequencies.append(f)
             velocities.append(c)
             spreads.append(residual * c)             # residual scaled to m/s
@@ -654,6 +817,7 @@ def spac_dispersion(
                 float(np.median(amplitudes)) if amplitudes else None
             ),
             "separation_verdict": test.verdict,
+            "multi_lobe_points": n_multi_lobe,
         },
     )
     # The separation test can pass on a curve that is still an artefact, so
@@ -663,6 +827,22 @@ def spac_dispersion(
         curve.metadata["wavelength_index"] = pinning.index
         curve.metadata["wavelength_verdict"] = pinning.verdict
         curve.metadata["plausible"] = pinning.plausible
-    except ValueError:
+    except ValueError as exc:
+        # Untested is not the same as passed: say which it is, and why.
         curve.metadata["plausible"] = None
+        span = curve.frequency.max() / curve.frequency.min()
+        if n_multi_lobe and n_multi_lobe == curve.n_points:
+            curve.metadata["wavelength_verdict"] = (
+                f"not tested for wavelength pinning: the curve spans only "
+                f"{span:.2f}x in frequency. Every point passed the multi-lobe "
+                "Bessel test instead -- coherency negative on some rings and "
+                "positive on others, which the flat coherency that pinning comes "
+                "from cannot produce. Treat it as a short-band phase velocity "
+                f"near {np.median(curve.frequency):.0f} Hz, not a dispersion curve."
+            )
+        else:
+            curve.metadata["wavelength_verdict"] = (
+                f"NOT VERIFIED: {exc} Nothing else in this curve rules out a "
+                "flat coherency inverted through J0."
+            )
     return curve

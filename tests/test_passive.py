@@ -599,6 +599,168 @@ def test_velocity_slope_is_flat_for_a_real_wavefield():
     assert np.abs(test.velocity_slope[finite]).max() < 0.1
 
 
+# -- past the first zero of J0: the multi-lobe criterion --------------------
+
+
+def _isotropic_past_first_zero(velocity=300.0, alpha=0.7):
+    """The 2026-10-01 compact geometry seeing a slow wave at 22-30 Hz.
+
+    The wavelength (10-14 m) is comparable to the separations, so the inner
+    rings sit in the first trough of J0 and the outer ones on its second
+    lobe: coherency falls, goes negative, and comes back up.
+    """
+    from scipy.special import j0
+
+    frequency = np.linspace(22.0, 30.0, 41)
+    rho = alpha * j0(
+        2 * np.pi * frequency[None, :] * COMPACT_DISTANCES[:, None] / velocity
+    )
+    return _spac_result(COMPACT_DISTANCES, rho, frequency)
+
+
+def _directional(offsets, velocity, frequency, alpha=0.9):
+    """One plane wave travelling along a line array: no azimuthal average."""
+    offsets = np.asarray(offsets, dtype=float)
+    i, j = np.triu_indices(offsets.size, 1)
+    lag = offsets[j] - offsets[i]
+    gamma = alpha * np.exp(
+        2j * np.pi * frequency[None, :] * lag[:, None] / velocity
+    )
+    distance = np.abs(lag)
+    return P.SpacResult(
+        frequency=frequency, distance=distance, coherency=gamma.real,
+        coherency_abs=np.abs(gamma), phase=np.angle(gamma),
+        pairs=pd.DataFrame({"node_a": i, "node_b": j, "distance": distance}),
+        n_windows=100, n_windows_rejected=0,
+    )
+
+
+def test_multi_lobe_accepts_an_isotropic_wave_past_the_first_zero():
+    """The coherency rises again with separation, so the first-lobe test fails.
+
+    That is the right behaviour for the first-lobe test and the wrong answer
+    overall: the multi-ring Bessel fit pins this down exactly.
+    """
+    result = _isotropic_past_first_zero()
+
+    first_only = P.separation_test(result, multi_lobe=False)
+    assert not first_only.usable.any(), "the first-lobe test alone rejects it"
+
+    test = P.separation_test(result)
+    assert test.multi_lobe.all()
+    assert not test.first_lobe.any()
+    assert "multi-lobe" in test.verdict
+    assert np.nanmedian(test.multi_lobe_velocity) == pytest.approx(300.0, rel=0.02)
+
+    curve = P.spac_dispersion(result, test=test)
+    assert curve.n_points == result.frequency.size
+    assert np.median(curve.velocity) == pytest.approx(300.0, rel=0.02)
+    assert curve.metadata["coherent_fraction"] == pytest.approx(0.7, abs=0.05)
+    assert curve.metadata["multi_lobe_points"] == curve.n_points
+
+
+def test_a_short_multi_lobe_band_is_reported_untested_not_plausible():
+    """22-30 Hz is a factor of 1.36: too short for the pinning test to mean anything."""
+    curve = P.spac_dispersion(_isotropic_past_first_zero())
+    assert curve.metadata["plausible"] is None
+    assert "not tested for wavelength pinning" in curve.metadata["wavelength_verdict"]
+    assert "multi-lobe" in curve.metadata["wavelength_verdict"]
+
+
+def test_a_short_first_lobe_band_is_reported_not_verified():
+    from scipy.special import j0
+
+    frequency = np.linspace(5.5, 6.5, 21)
+    rho = j0(2 * np.pi * frequency[None, :] * COMPACT_DISTANCES[:, None] / 250.0)
+    curve = P.spac_dispersion(_spac_result(COMPACT_DISTANCES, rho, frequency))
+    assert curve.metadata["multi_lobe_points"] == 0
+    assert curve.metadata["plausible"] is None
+    assert curve.metadata["wavelength_verdict"].startswith("NOT VERIFIED")
+
+
+def test_pointwise_inversion_refuses_multi_lobe_frequencies():
+    """Point-wise inversion is first-lobe only, so it would get these wrong."""
+    with pytest.raises(ValueError, match="no frequency passed"):
+        P.spac_dispersion(_isotropic_past_first_zero(), method="pointwise")
+
+
+def test_multi_lobe_recovers_a_simulated_slow_wavefield():
+    """End to end: noise from every azimuth, wavelengths shorter than the line."""
+    offsets = [0, 3, 7, 12, 20]
+    survey = make_survey(
+        offsets, propagating_noise(offsets, velocity=100.0, local_noise=0.3)
+    )
+    result = P.spac_coherency(survey, window=20.0, fmin=6.0, fmax=14.0)
+    test = P.separation_test(result)
+    assert not test.first_lobe.any()
+    assert test.multi_lobe.mean() > 0.8
+
+    curve = P.spac_dispersion(result, test=test)
+    assert np.median(curve.velocity) == pytest.approx(100.0, rel=0.05)
+    assert curve.metadata["plausible"]
+
+
+def test_multi_lobe_rejects_a_flat_coherency():
+    """No ring is negative, so there is nothing a common-mode field could not do."""
+    frequency = np.linspace(20.0, 35.0, 31)
+    flat = np.full((COMPACT_DISTANCES.size, frequency.size), 0.6)
+    test = P.separation_test(_spac_result(COMPACT_DISTANCES, flat, frequency))
+    assert not test.multi_lobe.any()
+    assert not test.usable.any()
+    with pytest.raises(ValueError, match="no frequency passed"):
+        P.spac_dispersion(_spac_result(COMPACT_DISTANCES, flat, frequency), test=test)
+
+
+def test_multi_lobe_rejects_a_fast_directional_wave():
+    """The 2026-09-25 failure: 2 km/s along a 40 m line, around 20 Hz.
+
+    The pairs aligned with the wave go negative through cos(k dx), and a
+    Bessel function fits the real part well enough. Only the imaginary part,
+    which an azimuthal average would have removed, gives it away.
+    """
+    result = _directional([0, 6.1, 20.2, 36.3, 40.5], 2000.0,
+                          np.linspace(15.0, 25.0, 21))
+    lenient = P.separation_test(result, max_imaginary_ratio=np.inf)
+    assert lenient.multi_lobe.any(), "the real part alone should be fooled"
+
+    strict = P.separation_test(result)
+    assert not strict.multi_lobe.any()
+
+
+def test_multi_lobe_rejects_a_reversed_node_on_a_common_mode_field():
+    """A node wired backwards makes its own pairs negative -- not a wave."""
+    frequency = np.linspace(20.0, 35.0, 31)
+    radius = np.array([0.0, 5.9, 6.5, 7.6, 8.4])
+    azimuth = np.radians([0, 20, 110, 200, 290])
+    east, north = radius * np.sin(azimuth), radius * np.cos(azimuth)
+    i, j = np.triu_indices(5, 1)
+    distance = np.hypot(east[j] - east[i], north[j] - north[i])
+    for flipped in range(5):
+        sign = np.ones(5)
+        sign[flipped] = -1.0
+        rho = 0.8 * (sign[i] * sign[j])[:, None] * np.ones((1, frequency.size))
+        test = P.separation_test(_spac_result(distance, rho, frequency))
+        assert not test.multi_lobe.any(), f"node {flipped} reversed"
+
+
+def test_multi_lobe_needs_the_closest_ring_inside_the_first_trough():
+    """The 2026-10-01 wide layout at 25 Hz: every ring 0.8-2.5 wavelengths out.
+
+    Rings that far out sample only the Bessel tail, which is nearly periodic
+    in r, so on real data several lobes fit about equally well. The clean
+    synthetic does fit uniquely; the guard rejects it anyway, by design.
+    """
+    from scipy.special import j0
+
+    distances = np.array([12.1, 13.5, 13.8, 17.0, 17.5, 21.8, 22.3, 25.7, 33.8, 38.6])
+    frequency = np.linspace(24.0, 26.0, 11)
+    rho = 0.7 * j0(2 * np.pi * frequency[None, :] * distances[:, None] / 390.0)
+    result = _spac_result(distances, rho, frequency)
+
+    assert P.separation_test(result, max_inner_ratio=1.0).multi_lobe.mean() > 0.8
+    assert not P.separation_test(result).multi_lobe.any()
+
+
 # -- plane-wave fit on a 2-D array -------------------------------------------
 
 # Five nodes, log-spaced radii and golden-angle azimuths, ~4-35 m separations.
