@@ -2,8 +2,8 @@
 
 What is in the two ATOM-1C zips, what the format is, and what the data can
 and cannot support. Written up because the format had to be
-reverse-engineered and because the processing conclusion is negative — both
-are the kind of thing that gets rediscovered expensively.
+reverse-engineered and because the processing conclusion is mostly
+negative — both are the kind of thing that gets rediscovered expensively.
 
 | Zip | Files | Field days |
 |---|---|---|
@@ -23,6 +23,14 @@ the ambient field no longer correlates across even 5 m. At site A (about
 band, but the fast rock-guided field still dominates it there. The arrays
 were not too small or too few for the soil; at these sites the ambient
 field the nodes record barely carries the soil's velocity.
+
+*Barely* is not *not at all*. On the 2026-10-01 compact circle at site A the
+coherency at 25–30 Hz is negative on the 6–9 m pairs and positive again on
+the 13 m pairs: a Bessel function past its first zero, which no fast or
+common-mode field can produce. A joint fit across the rings gives about
+325 m/s at 28 Hz, a soil Vs of about 290 m/s that agrees with the Geode
+MASW ([below](#the-compact-circle-does-see-the-soil-at-2729-hz)). It is one
+phase velocity in a narrow band, not a profile.
 
 ## The `.atm` format
 
@@ -306,6 +314,50 @@ there arrives from below. The 2.2–2.7 km/s at site B is below that site's
 rock P-wave velocity (3.75 km/s) and could be a Rayleigh wave in the rock,
 but the data cannot exclude a steep body wave.
 
+### The compact circle does see the soil, at 27–29 Hz
+
+Above 20 Hz the coherency is weak, and the default diagnostics used to stop
+there. But on the 2026-10-01 compact layout (centre node 101529, four ring
+nodes at GPS radii of 5.9–8.4 m, pairs of 5.6–14.2 m) it does something
+specific at 25–30 Hz. It is about −0.24 on the 6–8 m pairs and +0.23 on the
+13 m pairs, and the pattern holds in both halves of the record. Coherency
+that is negative at one separation and positive again at a larger one is
+J0 past its first zero. It needs a wavelength comparable to the
+separations, about 12 m here. A wave at 1.5 km/s or more, a common-mode
+signal and incoherent noise are all positive at every separation.
+
+`spac_dispersion` now accepts these frequencies by default (see
+[below](#why-the-diagnostics-needed-fixing)):
+
+| Frequency | c (m/s) | Coherent fraction A | Fit residual |
+|---|---|---|---|
+| 27.2–27.9 Hz | 322–328 | 0.67–0.74 | 0.045–0.06 |
+| 28.0–28.5 Hz | 326–332 | 0.70–0.74 | 0.06–0.08 |
+| 28.6–29.0 Hz | 330–334 | 0.66–0.72 | 0.08–0.10 |
+
+That is about **325 m/s at 28 Hz**, λ ≈ 12 m, and the same within 2 m/s from
+10 s and 30 s windows. Fitting 25–30 Hz by hand (`only_usable=False`) gives
+366, 340, 324, 326, 334 and 338 m/s. The 25–27 Hz bins are left out by
+default. Their imaginary coherency is 0.6 to more than 1 times the real
+part, and an isotropic field would have averaged it away.
+
+Interpretation, with the 2026-09-18 refraction layering (6.2 m at Vp 958 m/s
+over 3380 m/s) fixed: a soil Vs of about **290 m/s** reproduces 330, 319 and
+311 m/s at 27, 28 and 29 Hz. The rock Vs hardly matters here: 1.5 or
+2.5 km/s changes those by 2 m/s. That is close to the Geode MASW's 265–276 m/s
+at 39–60 Hz. The positions are GPS-only, and velocity scales directly with
+the separations, so a ±20 % error in the ring radius moves the soil Vs to
+about **250–310 m/s**. Taping the layout would remove most of that.
+
+The same test finds nothing on the other layouts. On 2026-09-25 the outer
+pairs go slightly negative at 19–21 Hz, but that is the directional 1.6 km/s
+field: one plane wave makes aligned pairs negative through cos(k·Δx), and
+its imaginary coherency is 0.9 of the real part. The 2026-10-01 wide
+layout fits about 390 m/s at 24–26 Hz, but its closest ring is already
+0.8 λ out. Rings that far out see only the Bessel tail, which is nearly
+periodic in r, so the lobe is not pinned. That layout is rejected, and
+the 2026-09-18 line, June and July with it.
+
 ### The hammer shots tell the same story
 
 For the shots nearest 101527 on 2026-09-25, the 15–40 Hz envelope reaches
@@ -326,6 +378,29 @@ against log separation to stay below 0.5 (it is 1 for that failure,
 whatever the geometry). With that, both October 1 layouts fail outright,
 and September 25 is "valid only in part of the band", where
 `spac_dispersion` still refuses to produce a curve.
+
+Those three checks all assume the first lobe of J0, where coherency
+falls with separation. That made them blind to the compact circle's
+27–29 Hz band, where coherency correctly rises again between the 8 m and
+13 m rings. `separation_test` now has a second, **multi-lobe** route. A
+frequency is accepted when the joint fit `A·J0(2πfr/c)` over at least
+three rings meets all of these:
+- residual ≤ 0.10 and A ≥ 0.3;
+- some ring at −0.15 or below;
+- the closest ring no further out than the first trough of J0
+  (r/λ ≤ 0.61);
+- no velocity 20 % away fits within 1.5× the residual;
+- the rms imaginary coherency is at most 0.6 of the real.
+
+The first-lobe checks are unchanged. `SeparationTest` reports the two
+routes as `first_lobe` and `multi_lobe`. `spac_dispersion` inverts
+multi-lobe frequencies with the fit only, never point-wise.
+
+A band that short (1.06× in frequency) is too narrow for `wavelength_test`.
+`spac_dispersion` reports such a curve as `plausible: None`, never `True`,
+and its `wavelength_verdict` says why. If every point came in on the
+multi-lobe route, the verdict says the curve cannot be a flat coherency;
+otherwise it says NOT VERIFIED.
 
 ## Why a 40 m array cannot reach Vs30 here
 
@@ -377,11 +452,20 @@ falls from about 1.2 km/s at 12 Hz to 560 m/s at 20 Hz and 290 m/s at
 soil's branch does overlap the coherent band and the array's wavelength
 range. But at 14–20 Hz both October 1 layouts measure 1.7–2.6 km/s with a
 single plane wave explaining all the coherency: the fast arrivals swamp the
-fundamental mode, and five nodes cannot separate two waves at once. Only at
-22–25 Hz does the compact layout hint at 400–800 m/s, and those bins are
-flagged aliased with brackets reaching down to the search floor. A tighter
-array (1–5 m separations) aimed at 20–30 Hz is the one passive experiment
-left that could reach the soil at site A; at site B there is none.
+fundamental mode, and five nodes cannot separate two waves at once. The
+plane-wave fit at 22–25 Hz only hints at 400–800 m/s, flagged aliased.
+
+This paragraph used to end by saying that only a tighter array (1–5 m
+separations) could reach the soil at site A. **That is superseded.** The
+compact circle already did, at 27–29 Hz. It used the spatial pattern across
+its rings past the first zero of J0, not a single plane wave:
+about 325 m/s, a soil Vs of about 290 m/s
+([above](#the-compact-circle-does-see-the-soil-at-2729-hz)). What that
+array lacks is bandwidth. One 1.06× band gives one phase velocity, so the
+soil thickness still has to come from refraction. A smaller circle would
+widen the band upward, but only if the ambient field stays coherent above
+30 Hz. That is worth testing, but it is no longer the only route to the
+soil. At site B, with the soil band above 30 Hz, there is still none.
 
 ## What would work
 
@@ -399,8 +483,10 @@ left that could reach the soil at site A; at site B there is none.
 - **Know what the ground is before choosing passive.** Thin soil over hard
   rock — site B here — puts the soil band above 30 Hz, out of reach of
   ambient noise at any array size; a few metres over rock — site A — leaves
-  the soil band under a much stronger rock-guided field. A refraction line first, which is cheap
-  and was done here anyway, says whether passive can work at all.
+  most of the soil band under a much stronger rock-guided field, with only
+  a narrow window just above it (27–29 Hz on a 6–14 m circle). A refraction
+  line first, which is cheap and was done here anyway, says whether passive
+  can work at all.
 - **Tape the layout.** GPS-only positions cost 20–50 % on short separations.
 - **For active shear wave, use the Geode, not the nodes** — 24 channels beats
   5, and the only change needed is a longer record. A 1 s record on a 24-channel
@@ -417,12 +503,14 @@ cannot deliver the result the example would exist to demonstrate. The
 October 2-D data were the deployment that was to be revisited for; they are
 clean and well-designed, and they show that the limitation is the site
 rather than the array. They are a good teaching dataset for *why* passive
-fails over shallow rock — the plane-wave fit makes the point directly — but
-not for a passive Vs profile.
+fails over shallow rock — the plane-wave fit makes the point directly — and,
+on the compact circle, for one soil phase velocity past the first zero of
+J0; but not for a passive Vs profile.
 
 Tools added for this analysis: `drivers.atom_atm.split_layouts`,
 `passive.plane_wave_fit` (also takes `events=` for transients on a 2-D
-array), and the log-log velocity slope in `passive.separation_test`.
+array), the log-log velocity slope in `passive.separation_test`, and its
+multi-lobe criterion past the first zero of J0 (`SeparationTest.multi_lobe`).
 `notebooks/passive_shear_wave_colab.ipynb` now works per layout rather than
 per field day, adds the plane-wave fit as step 5b, and on a 2-D array takes
 its dispersion points from that fit — showing them, but inverting them only
