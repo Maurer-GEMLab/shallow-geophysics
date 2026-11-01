@@ -1,0 +1,4 @@
+code,chi2,rms_pct,r2_elements,r2_time_min,r2_iterations,r2_final_rms_reported,median_abs_dlog10_vs_sg
+shallowgeo lam=20,171.52389558218275,37.860749329234416,,,,,
+R2 field214,271.0527029432284,61.1809230238989,4800.0,25.14222677151362,10.0,Final RMS Misfit:       16.46,0.15326820581189754
+R2 field214_default,205.93454046150634,36.0978169359967,4800.0,21.360972400506338,10.0,Final RMS Misfit:        6.56,
