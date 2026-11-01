@@ -31,6 +31,7 @@ SHOT_SUFFIXES = frozenset({".dat", ".sgy", ".segy", ".sg2"})
 EXAMPLES = {
     "2026-09-18-refraction-line": "13 shots from 8 positions into a 92 ft spread (refraction)",
     "2026-09-25-srt-line": "16 shots, every other geophone, 69 ft spread (tomography)",
+    "2610234-ert-line": "SuperSting dipole-dipole, 42 electrodes at 3 ft, RES2DINV .dat (ERT)",
 }
 
 REPO_ARCHIVE = "https://github.com/Maurer-GEMLab/shallow-geophysics/archive/refs/heads/main.zip"

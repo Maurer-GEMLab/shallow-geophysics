@@ -25,12 +25,13 @@ not yet built. See [docs/roadmap.md](docs/roadmap.md).
 | Passive surface wave | Geometrics ATOM-1C, SEG-2 export | `atom-seg2` | same |
 | Ground gravity | Scintrex CG-5 | `cg5` | reads; corrections not yet built |
 | Ground magnetics | Geometrics G-857 | `g857` | reads; corrections not yet built |
+| Resistivity (ERT) | AGI SuperSting, RES2DINV `.dat` export | `ert.read_res2dinv` | `shallowgeo.ert`: file repair, 2.5-D forward model, 2-D inversion |
 
 Station positioning is handled by `shallowgeo.positions`, which consumes
 *corrected* GNSS exports (Emlid Reach, and any CSV whose headers match) — it
 does not process RINEX. See [ADR-003](docs/architecture.md).
 
-ERT, GPR, EM, and MT come later; see the
+GPR, EM, and MT come later; see the
 [originating concept note](docs/concept-summary.md).
 
 ## Install
@@ -221,6 +222,34 @@ works through why, on the 2026 field data.
 See [notebooks/passive_shear_wave_colab.ipynb](notebooks/passive_shear_wave_colab.ipynb)
 for the whole workflow with the diagnostics plotted.
 
+### Resistivity (ERT)
+
+```python
+from shallowgeo.ert import read_res2dinv, resistivity_tomography, lambda_sweep
+
+data = read_res2dinv("2610234.dat", n_electrodes=42)   # integer n, cable trimmed
+data.plot_pseudosection()
+data.to_res2dinv("2610234_clean.dat")                  # a file RES2DINV accepts
+
+result = resistivity_tomography(data, lam=20, rel_error=0.03)
+result.plot()                    # faded where the data do not reach
+result.plot_pseudosections()     # measured, calculated, misfit
+print(result.summary())          # chi2 and RMS misfit: check before interpreting
+```
+
+`read_res2dinv` reads standard arrays and the general array (type 11),
+works out the four electrode positions of every reading and snaps them to
+the unit spacing, which repairs the non-integer `n` SuperSting exports carry.
+`n_electrodes=` (or `ERTData.trim`) drops readings the instrument made with
+electrode addresses past the end of the cable. The forward model is 2.5-D
+bilinear finite elements with a numerical geometric factor, within 1 % of
+the analytic two-layer solution. The inversion is smoothness-constrained
+Gauss-Newton in log-resistivity with sensitivities by reciprocity;
+`doi_index` gives the Oldenburg & Li depth of investigation. NumPy and SciPy
+only, flat ground only. See
+[notebooks/ert_supersting.ipynb](notebooks/ert_supersting.ipynb) and
+[docs/ert-validation.md](docs/ert-validation.md).
+
 ### Command line
 
 ```bash
@@ -228,6 +257,7 @@ shallowgeo info                   # environment + registered drivers
 shallowgeo identify 4001.sgy      # which drivers claim this file
 shallowgeo read 3001.dat          # summary, metadata, provenance
 shallowgeo read LINE1.DAT --spacing 2.0 --source-offset -1.0
+shallowgeo ert-clean 2610234.dat -e 42   # RES2DINV-ready: integer n, 42 electrodes
 ```
 
 End-to-end scripts live in [examples/scripts/](examples/scripts/).

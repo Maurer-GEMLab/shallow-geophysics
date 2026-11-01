@@ -26,6 +26,18 @@ def main(argv: list[str] | None = None) -> int:
         "--source-offset", type=float, help="shot position along line, metres"
     )
 
+    p_ert = sub.add_parser(
+        "ert-clean",
+        help="repair a RES2DINV .dat file: integer n, drop readings past the cable",
+    )
+    p_ert.add_argument("path", type=Path)
+    p_ert.add_argument("-e", "--electrodes", type=int, required=True,
+                       help="number of electrodes actually in the ground")
+    p_ert.add_argument("--first", type=int, default=0,
+                       help="index of the first electrode in the ground (default 0)")
+    p_ert.add_argument("-o", "--output", type=Path,
+                       help="output file (default: <name>_clean.dat next to the input)")
+
     args = parser.parse_args(argv)
 
     if args.command == "info":
@@ -65,6 +77,26 @@ def main(argv: list[str] | None = None) -> int:
         print("  provenance:")
         for step in survey.provenance:
             print(f"    {step}")
+        return 0
+
+    if args.command == "ert-clean":
+        from .ert import read_res2dinv
+
+        try:
+            raw = read_res2dinv(args.path)
+            clean = raw.trim(args.electrodes, first=args.first)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        out = args.output or args.path.with_name(f"{args.path.stem}_clean.dat")
+        clean.to_res2dinv(out)
+        print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
+              f"positions; electrodes moved by at most "
+              f"{raw.metadata['snapped_max_m'] * 1000:.1f} mm to the "
+              f"{raw.spacing:g} m grid")
+        print(f"kept {len(clean)} readings on electrodes {args.first + 1}-"
+              f"{args.first + args.electrodes}, dropped {len(raw) - len(clean)}")
+        print(f"wrote {out}")
         return 0
 
     return 1

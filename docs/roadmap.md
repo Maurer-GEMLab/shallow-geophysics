@@ -131,6 +131,11 @@ checks `provenance.applied()` and refuses to double-apply.
       with β by the discrepancy principle, bounds (L-BFGS-B), and compact
       (minimum-support) inversion, used by
       `notebooks/gravity_magnetics_tunnel.ipynb`. NumPy/SciPy only.
+- [x] 2-D ERT in `shallowgeo.ert`: RES2DINV reader/writer with the
+      SuperSting repairs (integer n, readings past the cable), 2.5-D FE
+      forward model, Gauss-Newton smoothness inversion, DOI index, used by
+      `notebooks/ert_supersting.ipynb`. NumPy/SciPy only. Still to do:
+      topography, reciprocal/repeat errors from `.stg` files, IP.
 - [ ] Gravity, magnetics → SimPEG `potential_fields` (3-D)
 - [ ] Surface wave → `disba` / `evodcinv` 1D, projected onto the canonical grid
 
@@ -142,7 +147,7 @@ An enabled capability, not a solved problem.
 
 ## Deferred
 
-GUI (Layer 4), ERT, GPR, EM, MT, live instrument control. See
+GUI (Layer 4), GPR, EM, MT, live instrument control. See
 [concept-summary.md](concept-summary.md).
 
 ## Field-procedure notes from the validation data
