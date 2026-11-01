@@ -230,6 +230,7 @@ from shallowgeo.ert import read_res2dinv, resistivity_tomography, lambda_sweep
 data = read_res2dinv("2610234.dat", n_electrodes=42)   # integer n, cable trimmed
 data.plot_pseudosection()
 data.to_res2dinv("2610234_clean.dat")                  # a file RES2DINV accepts
+data.coverage()                  # per (dipole, n): positions measured of those possible
 
 result = resistivity_tomography(data, lam=20, rel_error=0.03)
 result.plot()                    # faded where the data do not reach
@@ -241,7 +242,10 @@ print(result.summary())          # chi2 and RMS misfit: check before interpretin
 works out the four electrode positions of every reading and snaps them to
 the unit spacing, which repairs the non-integer `n` SuperSting exports carry.
 `n_electrodes=` (or `ERTData.trim`) drops readings the instrument made with
-electrode addresses past the end of the cable. The forward model is 2.5-D
+electrode addresses past the end of the cable. `coverage` and
+`missing_readings` find the opposite problem: positions on the cable where
+the survey's own array configurations fit but the file has no reading
+(`ert-clean` reports them too). The forward model is 2.5-D
 bilinear finite elements with a numerical geometric factor, within 1 % of
 the analytic two-layer solution. The inversion is smoothness-constrained
 Gauss-Newton in log-resistivity with sensitivities by reciprocity;
@@ -257,7 +261,7 @@ shallowgeo info                   # environment + registered drivers
 shallowgeo identify 4001.sgy      # which drivers claim this file
 shallowgeo read 3001.dat          # summary, metadata, provenance
 shallowgeo read LINE1.DAT --spacing 2.0 --source-offset -1.0
-shallowgeo ert-clean 2610234.dat -e 42   # RES2DINV-ready: integer n, 42 electrodes
+shallowgeo ert-clean 2610234.dat -e 42   # RES2DINV-ready: integer n, 42 electrodes; reports gaps
 ```
 
 End-to-end scripts live in [examples/scripts/](examples/scripts/).

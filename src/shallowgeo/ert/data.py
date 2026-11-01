@@ -50,6 +50,13 @@ electrode addresses that have nothing on them, and writes those readings to
 the file like any other. They look plausible -- they continue the trend of
 the real ones -- and they are not data. :meth:`ERTData.trim` drops every
 measurement that uses an electrode beyond the number actually in the ground.
+
+And the opposite problem: **readings missing on the cable.** A file can lack
+readings that its own measurement scheme makes on the electrodes that were
+there (skipped injections, a filtered export, a run stopped early).
+:meth:`ERTData.coverage` counts, for each array configuration, the positions
+measured out of those possible, and :meth:`ERTData.missing_readings` lists
+the gaps.
 """
 
 from __future__ import annotations
@@ -280,6 +287,92 @@ class ERTData:
     def drop_nonpositive(self) -> ERTData:
         """Drop measurements with zero or negative apparent resistivity."""
         return self.select(self.data["rhoa"] > 0, reason="drop_nonpositive")
+
+    # -- coverage ------------------------------------------------------------
+
+    def _configurations(self) -> tuple[np.ndarray, np.ndarray]:
+        """Each measurement as (electrode offsets from its left-most electrode, that electrode).
+
+        Offsets of remote electrodes stay ``-1``. Two measurements with the
+        same offsets are the same array shape at different places on the line.
+        """
+        idx = self.data[list("abmn")].to_numpy()
+        real = idx >= 0
+        start = np.where(real, idx, np.iinfo(idx.dtype).max).min(axis=1)
+        return np.where(real, idx - start[:, None], -1), start
+
+    def _configuration_labels(self, offsets: np.ndarray) -> dict[str, np.ndarray]:
+        """Dipole length (in spacings) and ``n`` for dipole-dipole offsets, else nothing."""
+        if self.array != "dipole-dipole":
+            return {}
+        dip = np.abs(offsets[:, 0] - offsets[:, 1])
+        return {"dipole": dip, "sep": (offsets[:, 2] - offsets[:, 0]) // np.maximum(dip, 1)}
+
+    def coverage(self) -> pd.DataFrame:
+        """For each array shape in the data, how many of its possible positions were measured.
+
+        An array shape (a *configuration*) is a measurement's four electrodes
+        relative to the left-most of them: for dipole-dipole, a dipole length
+        and an ``n``. It fits at every position along the line where all of
+        its electrodes land on ``electrodes``; this counts those positions and
+        how many the data hold. Run it after :meth:`trim`, so that the
+        electrodes are the ones in the ground.
+
+        A survey whose command file measures every shape at every position
+        has nothing missing. A gap means a reading the survey's own scheme
+        allows was not made or not exported -- a skipped injection, a filtered
+        export, an aborted run -- and leaves a hole in the pseudosection that
+        :meth:`trim` did not cause. :meth:`missing_readings` lists them.
+
+        Returns one row per configuration: ``offsets`` (``a b m n`` relative
+        to the left-most electrode), ``dipole`` and ``sep`` for dipole-dipole
+        (in spacings), ``measured``, ``possible`` and ``missing`` (counts of
+        positions; repeat readings count once).
+        """
+        offsets, start = self._configurations()
+        shapes, which = np.unique(offsets, axis=0, return_inverse=True)
+        which = which.ravel()
+        rows = []
+        for i, shape in enumerate(shapes):
+            possible = max(self.n_electrodes - int(shape.max()), 0)
+            measured = np.unique(start[which == i]).size
+            rows.append({"offsets": tuple(int(o) for o in shape), "measured": measured,
+                         "possible": possible, "missing": possible - measured})
+        out = pd.DataFrame(rows)
+        for name, values in self._configuration_labels(shapes).items():
+            out.insert(1, name, values.astype(int))
+        if "dipole" in out:
+            out = out[["offsets", "dipole", "sep", "measured", "possible", "missing"]]
+            out = out.sort_values(["dipole", "sep"], ignore_index=True)
+        return out
+
+    def missing_readings(self) -> pd.DataFrame:
+        """Readings the survey's own configurations allow on these electrodes but the data lack.
+
+        One row per missing reading, with its electrodes ``a b m n`` and where
+        it would sit on a pseudosection (``x``, ``depth``), plus ``dipole``
+        and ``sep`` for dipole-dipole. See :meth:`coverage`.
+        """
+        offsets, start = self._configurations()
+        shapes, which = np.unique(offsets, axis=0, return_inverse=True)
+        which = which.ravel()
+        rows, row_shapes = [], []
+        for i, shape in enumerate(shapes):
+            have = set(start[which == i].tolist())
+            for s in range(max(self.n_electrodes - int(shape.max()), 0)):
+                if s not in have:
+                    rows.append(np.where(shape >= 0, shape + s, -1))
+                    row_shapes.append(shape)
+        cols = ["a", "b", "m", "n", "x", "depth"]
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        ghost = ERTData(self.electrodes,
+                        pd.DataFrame(np.array(rows), columns=list("abmn")).assign(rhoa=np.nan),
+                        self.spacing, self.array)
+        out = ghost.data[cols].copy()
+        for name, values in self._configuration_labels(np.array(row_shapes)).items():
+            out[name] = values.astype(int)
+        return out
 
     # -- writing -------------------------------------------------------------
 

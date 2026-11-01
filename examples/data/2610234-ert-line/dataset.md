@@ -21,7 +21,7 @@ are physically possible before believing an inversion of them.
 | Export format | RES2DINV `.dat`, standard-array form: array type 3 (dipole-dipole), x-location at the array mid-point (line 5 = `1`), no IP (line 6 = `0`), no topography (trailing zeros) |
 | Length unit | Metres in the file. The spacing, 0.9144 m, is **3 ft**. |
 | Electrodes | **42** in the ground at 3 ft (0.9144 m), electrode 1 at x = 0, electrode 42 at x = 37.49 m |
-| Measurements | 323 in the file; **214** use only electrodes 1-42 |
+| Measurements | 323 in the file; **214** use only electrodes 1-42, out of 466 that the same configurations allow on those electrodes |
 | Array | Dipole-dipole, laid out C2 C1 P1 P2. Dipole lengths 1-4 spacings among the 214; n from 1 to 9 |
 | Electrode contact, current, stacking | *Not recorded* in a `.dat` export (they are in the SuperSting `.stg` file) |
 | Line orientation and topography | *Not recorded*; treated as flat |
@@ -49,6 +49,19 @@ or write a RES2DINV-ready copy with
   command file addressed electrodes up to position 136 (x = 124 m) but the
   cable had 42, and the SuperSting recorded a value for every one of them.
   `ERTData.trim(42)` drops them.
+- **Most of the readings the scheme makes on the cable are not in the file.**
+  The 214 kept readings use 19 (dipole length, n) configurations, which fit
+  at 466 positions on 42 electrodes; the file has 214 of them. At dipole
+  length 1 it holds current dipoles starting at electrodes 1-10, then only
+  12, 15, 20, 31 and 38 (the n = 1 mid-points run 1.37, 2.29, ... 9.60 m,
+  then jump to 11.43, 14.17, 18.75, 28.80 and 35.20 m); dipole lengths 2
+  and 3 have the same pattern. The isolated current dipoles show as slanting
+  rows in the pseudosection with gaps between them. These gaps are in the
+  export, not made by trimming (`trim` only removes readings that use an
+  electrode past 42). Whether the SuperSting skipped those injections, the
+  run was cut short, or the export was filtered, the `.dat` cannot say; the
+  `.stg` file and the command file can. `ERTData.coverage()` and
+  `missing_readings()` list them, and `ert-clean` reports them.
 - **The remaining 214 do not look like a response of the ground either.**
   This is the one to understand before using the line for anything:
   - At dipole length 1, apparent resistivity rises from 91 Ω·m at n = 1
@@ -83,7 +96,8 @@ or write a RES2DINV-ready copy with
 shallowgeo ert-clean examples/data/2610234-ert-line/raw/2610234.dat -e 42
 ```
 
-reports 323 readings on 136 electrode positions, keeps 214 and writes a file
+reports 323 readings on 136 electrode positions, keeps 214, reports 252
+readings missing on the cable (by dipole length and n), and writes a file
 RES2DINV loads. The inversion of those 214 (`lam=20`, 3 % error) converges
 in 14 iterations to chi² 172 and an RMS misfit of 38 %, and a smaller `lam`
 does not do better. On the same data pyGIMLi reaches chi² 164 and 36 %, and

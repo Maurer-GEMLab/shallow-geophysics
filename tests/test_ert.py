@@ -167,8 +167,48 @@ class TestRes2dinv:
         p = _supersting_file(tmp_path)
         out = tmp_path / "clean.dat"
         assert cli.main(["ert-clean", str(p), "-e", "12", "-o", str(out)]) == 0
-        assert "dropped 3" in capsys.readouterr().out
+        printed = capsys.readouterr().out
+        assert "dropped 3" in printed
+        # four kept readings, four configurations: (a, n) = (1, 1) fits at 9 positions on 12
+        # electrodes and was measured at 1, and so on
+        assert "are not in the file" in printed
+        assert "dipole 1 x 0.9144 m: n=1 1/9" in printed
         assert len(read_res2dinv(out)) == 4
+
+
+class TestCoverage:
+    def test_a_complete_scheme_has_nothing_missing(self):
+        dd = dipole_dipole(15, 1.0, n_max=4, a_max=2)
+        cov = dd.coverage()
+        assert (cov["missing"] == 0).all()
+        assert cov["measured"].sum() == len(dd)
+        assert cov[["dipole", "sep"]].drop_duplicates().shape[0] == 8
+        assert dd.missing_readings().empty
+
+    def test_removed_readings_are_reported_where_they_were(self):
+        dd = dipole_dipole(15, 1.0, n_max=4, a_max=2)
+        gone = [3, 4, 20, len(dd) - 1]
+        cut = dd.select(~np.isin(np.arange(len(dd)), gone))
+        miss = cut.missing_readings()
+        want = dd.data.loc[gone, list("abmn")].to_numpy()
+        assert sorted(map(tuple, miss[list("abmn")].to_numpy())) == sorted(map(tuple, want))
+        assert np.allclose(np.sort(miss["x"]), np.sort(dd.data.loc[gone, "x"]))
+        assert cut.coverage()["missing"].sum() == 4
+        row = miss.set_index(["a", "b"]).loc[(4, 3)]  # gone[0]: a = 1, n = 1 starting at 3
+        assert (row["dipole"], row["sep"]) == (1, 1)
+
+    def test_other_arrays_and_remote_electrodes(self):
+        w = wenner(12, 1.0)
+        w2 = w.select(w.data.index != 0)
+        assert "dipole" not in w2.coverage()
+        assert w2.missing_readings()[list("abmn")].values.tolist() == [[0, 3, 1, 2]]
+        # pole-dipole: the remote B (-1) stays remote and does not set the shape's width
+        pdp = ERTData(np.column_stack([np.arange(8.0), np.zeros(8)]),
+                      pd.DataFrame({"a": [0, 2], "b": [-1, -1], "m": [1, 3], "n": [2, 4],
+                                    "rhoa": [1.0, 1.0]}), 1.0, "pole-dipole")
+        cov = pdp.coverage()
+        assert cov.loc[0, "possible"] == 6 and cov.loc[0, "missing"] == 4
+        assert (pdp.missing_readings()["b"] == -1).all()
 
 
 @pytest.mark.skipif(not EXAMPLE.exists(), reason="example dataset not present")
@@ -184,6 +224,17 @@ class TestExampleLine:
         assert len(t) == 214
         assert t.used_electrodes().tolist() == list(range(42))
         assert t.electrodes[-1, 0] == pytest.approx(41 * 0.9144)
+
+    def test_gaps_inside_the_cable_are_in_the_file(self):
+        t = read_res2dinv(EXAMPLE, n_electrodes=42)
+        cov = t.coverage()
+        assert cov[["measured", "possible", "missing"]].sum().tolist() == [214, 466, 252]
+        first = cov.iloc[0]
+        assert (first["dipole"], first["sep"], first["measured"], first["possible"]) == (1, 1, 15, 39)
+        # none of the missing readings is in the raw file under another numbering
+        raw = read_res2dinv(EXAMPLE).data[list("abmn")]
+        raw_rows = set(map(tuple, raw.to_numpy()))
+        assert not raw_rows & set(map(tuple, t.missing_readings()[list("abmn")].to_numpy()))
 
 
 class TestForward:

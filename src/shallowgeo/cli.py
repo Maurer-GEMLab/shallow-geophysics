@@ -96,6 +96,22 @@ def main(argv: list[str] | None = None) -> int:
               f"{raw.spacing:g} m grid")
         print(f"kept {len(clean)} readings on electrodes {args.first + 1}-"
               f"{args.first + args.electrodes}, dropped {len(raw) - len(clean)}")
+        cov = clean.coverage()
+        n_missing = int(cov["missing"].sum())
+        print(f"the kept readings use {len(cov)} array configurations, which fit at "
+              f"{int(cov['possible'].sum())} positions on these electrodes; "
+              f"{n_missing} of them are not in the file")
+        if n_missing:
+            print("  (gaps the file had already; trimming did not make them)")
+            gaps = cov[cov["missing"] > 0]
+            if "dipole" in gaps:
+                for dip, g in gaps.groupby("dipole"):
+                    counts = ", ".join(f"n={r.sep} {r.measured}/{r.possible}"
+                                       for r in g.itertuples())
+                    print(f"  dipole {dip} x {clean.spacing:g} m: {counts}")
+            else:
+                for r in gaps.itertuples():
+                    print(f"  offsets {r.offsets}: {r.measured}/{r.possible}")
         print(f"wrote {out}")
         return 0
 

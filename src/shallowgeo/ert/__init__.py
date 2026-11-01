@@ -4,7 +4,8 @@
     :class:`ERTData` -- electrodes and four-electrode measurements -- and
     the RES2DINV ``.dat`` reader and writer, including the repairs a
     SuperSting export needs: integer ``n`` and dropping measurements made
-    with electrodes past the end of the cable (:meth:`ERTData.trim`).
+    with electrodes past the end of the cable (:meth:`ERTData.trim`), and
+    finding readings missing on the cable (:meth:`ERTData.coverage`).
     Pseudosections, geometric factors, and measurement schemes for
     synthetic surveys.
 ``forward``
