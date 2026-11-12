@@ -1,9 +1,8 @@
 # SuperSting dipole-dipole line, program 2610234
 
-One AGI SuperSting resistivity line, exported for RES2DINV. It is the worked
-example for `shallowgeo.ert` and
-[`notebooks/ert_supersting.ipynb`](../../../notebooks/ert_supersting.ipynb),
-and it is here **because of its problems**: it shows both repairs a
+One AGI SuperSting resistivity line, exported for RES2DINV. It was the first
+worked example for `shallowgeo.ert`, and it is here **because of its
+problems**: it shows both repairs a
 SuperSting export can need, and it is a lesson in checking that the data
 are physically possible before believing an inversion of them.
 
@@ -102,7 +101,8 @@ RES2DINV loads. The inversion of those 214 (`lam=20`, 3 % error) converges
 in 14 iterations to chi² 172 and an RMS misfit of 38 %, and a smaller `lam`
 does not do better. On the same data pyGIMLi reaches chi² 164 and 36 %, and
 ResIPy's R2 reaches chi² 271 and 61 % (206 and 36 % with ResIPy's default
-error reweighting). The
-notebook shows why, then demonstrates the same inversion on synthetic data
-recorded with this line's exact measurement scheme, which it fits to the
-noise level.
+error reweighting). [`notebooks/ert_supersting.ipynb`](../../../notebooks/ert_supersting.ipynb)
+runs on any SuperSting `.dat`; set `DATA` to this file (the line is commented
+in its data cell) and its checks in section 4 show why no code can fit it:
+apparent resistivity rising with n faster than any layered ground allows,
+and readings from absent electrodes that look just like the rest.
