@@ -74,6 +74,7 @@ __all__ = [
     "ARRAYS",
     "ERTData",
     "read_res2dinv",
+    "read_stg",
     "geometric_factor",
     "median_depth",
     "dipole_dipole",
@@ -481,9 +482,11 @@ class ERTData:
         sc = ax.scatter(x[order], z[order], c=v[order], cmap=cmap, norm=norm,
                         s=size or 30, marker="s", edgecolors="none")
         if colorbar:
-            ax.figure.colorbar(sc, ax=ax, shrink=0.8, pad=0.02,
-                               label=label or ("apparent resistivity (Ω·m)"
-                                               if values is None else ""))
+            cb = ax.figure.colorbar(sc, ax=ax, shrink=0.8, pad=0.02,
+                                    label=label or ("apparent resistivity (Ω·m)"
+                                                    if values is None else ""))
+            if log:
+                _log_colorbar_ticks(cb)
         ex = self.electrodes[self.used_electrodes(), 0]
         ax.plot(ex, np.zeros_like(ex), "v", color="k", ms=3, clip_on=False)
         ax.set_xlim(self.electrodes[:, 0].min() - self.spacing,
@@ -504,6 +507,19 @@ class ERTData:
             "rhoa_max": float(d["rhoa"].max()),
             "max_pseudo_depth_m": float(d["depth"].max()),
         })
+
+
+def _log_colorbar_ticks(cb) -> None:
+    """Label a logarithmic colorbar 1-2-5 in plain numbers (10, 20, 50, 100 ...).
+
+    Matplotlib's default labels every minor tick as ``6x10^1`` when the range
+    is under about two decades, which piles the labels on top of each other.
+    """
+    from matplotlib.ticker import LogLocator, NullFormatter, StrMethodFormatter
+
+    cb.ax.yaxis.set_major_locator(LogLocator(subs=(1.0, 2.0, 5.0)))
+    cb.ax.yaxis.set_major_formatter(StrMethodFormatter("{x:g}"))
+    cb.ax.yaxis.set_minor_formatter(NullFormatter())
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +658,147 @@ def read_res2dinv(path: str | Path, *, n_electrodes: int | None = None,
         meta["topography"] = True
     out.provenance.record("read_res2dinv", path=str(path), array=ARRAYS[code],
                           measurements=count, snapped_max_m=meta["snapped_max_m"])
+    if n_electrodes is not None:
+        out = out.trim(n_electrodes, first=first_electrode)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Reading AGI SuperSting .stg files
+# ---------------------------------------------------------------------------
+
+_FEET = 0.3048
+# Detect the array from the electrode layout, most specific first (an
+# all-n=1 Wenner-Schlumberger file is a Wenner file).
+_DETECT_ORDER = (3, 1, 7, 4, 5, 6, 2)
+
+
+def read_stg(path: str | Path, *, n_electrodes: int | None = None,
+             first_electrode: int = 0, spacing: float | None = None) -> ERTData:
+    """Read the raw measurement file an AGI SuperSting writes (``.stg``).
+
+    The ``.stg`` file is what the instrument records; the RES2DINV ``.dat``
+    is converted from it. Reading the ``.stg`` directly keeps what the
+    conversion throws away: the measured transfer resistance, the
+    instrument's repeat error and the injected current for every reading,
+    and the readings with negative apparent resistivity (AGI's conversion
+    drops them, which hides how many there were). Electrode positions are
+    absolute, so electrode numbering does not shift when readings at the
+    end of the line are missing.
+
+    Three header lines (instrument, survey period and record count, unit),
+    then one comma-separated line per reading::
+
+        1,USER,20261111,12:06:20, 4.18646E+00, 3,435, 4.81053E+01,111126,
+          Ax,Ay,Az, Bx,By,Bz, Mx,My,Mz, Nx,Ny,Nz, Cmd=1,HV=258,...,Ch=1
+
+    record, type, date, time, ``V/I`` (ohm), repeat error (per mille),
+    current (mA), apparent resistivity, command file, the four electrode
+    positions, then the instrument settings.
+
+    ``rhoa`` is recomputed as ``k V/I`` from the electrode positions, in
+    ohm-m whatever the file's unit; for a metre file it agrees with the
+    instrument's own value to its six significant figures
+    (``metadata["rhoa_file_max_rel_diff"]``). Extra columns: ``record``,
+    ``time``, ``command``, ``channel``, ``current_ma``, ``stack_error``
+    (relative, 0.01 = 1 %; the spread of the stacked cycles, *not* a full
+    data error -- it is often zero) and ``rhoa_file``.
+
+    Parameters
+    ----------
+    n_electrodes, first_electrode
+        As for :func:`read_res2dinv`: trim to the electrodes in the ground.
+        Electrode 0 is the position at ``x = 0`` in the file (normally the
+        first takeout on the cable), not the left-most position that happens
+        to be used.
+    spacing
+        Unit electrode spacing (m). Inferred from the positions if omitted.
+
+    Assumes a 2-D line: every ``y`` is zero. Positions must sit on a
+    regular grid; remote (pole) electrodes are not supported yet.
+    """
+    path = Path(path)
+    text = path.read_text(errors="replace").splitlines()
+    header = [ln.strip() for ln in text[:3]]
+    if not header or "Sting" not in header[0]:
+        raise ValueError(f"{path.name}: not an AGI Sting/SuperSting .stg file")
+    unit_line = next((h for h in header if h.lower().startswith("unit")), "Unit: meter")
+    unit = unit_line.split(":", 1)[1].strip().lower()
+    if unit.startswith("m"):
+        to_m = 1.0
+    elif unit.startswith("f"):
+        to_m = _FEET
+    else:
+        raise ValueError(f"{path.name}: unknown unit {unit!r}")
+    meta: dict[str, Any] = {"source_file": path.name, "instrument": header[0], "unit": unit}
+    for h in header[1:]:
+        if "Records:" in h:
+            meta["records_in_header"] = int(h.split("Records:")[1].split()[0])
+
+    rows = []
+    for lineno, ln in enumerate(text[3:], start=4):
+        if not ln.strip():
+            continue
+        f = [t.strip() for t in ln.split(",")]
+        if len(f) < 21:
+            raise ValueError(f"{path.name} line {lineno}: expected at least 21 fields, "
+                             f"found {len(f)}")
+        settings = dict(t.split("=", 1) for t in f[21:] if "=" in t)
+        rows.append({
+            "record": int(f[0]), "time": f"{f[2]} {f[3]}", "r_file": float(f[4]),
+            "stack_error": float(f[5]) / 1000.0, "current_ma": float(f[6]),
+            "rhoa_file": float(f[7]), "program": f[8],
+            "xyz": [float(v) for v in f[9:21]],
+            "command": int(settings.get("Cmd", -1)), "channel": int(settings.get("Ch", -1)),
+        })
+    if not rows:
+        raise ValueError(f"{path.name}: no readings")
+    if "records_in_header" in meta and meta["records_in_header"] != len(rows):
+        raise ValueError(f"{path.name}: header says {meta['records_in_header']} records, "
+                         f"found {len(rows)}")
+    P = np.array([r["xyz"] for r in rows]).reshape(-1, 4, 3) * to_m  # (N, ABMN, xyz)
+    if np.any(P[:, :, 1] != 0):
+        raise ValueError(f"{path.name}: electrodes have y coordinates; only a straight "
+                         "2-D line along x is supported")
+    if np.any(P[:, :, 2] != 0):
+        meta["electrode_z_in_file"] = float(np.abs(P[:, :, 2]).max())
+    xs = P[:, :, 0]
+    if spacing is None:
+        gaps = np.diff(np.unique(np.round(xs, 6)))
+        spacing = round(float(gaps.min()), 6) if gaps.size else 1.0
+    grid = xs / spacing
+    snapped = np.round(grid)
+    off = np.abs(grid - snapped)
+    if off.max() > _SNAP_TOL:
+        worst = int(np.argmax(off.max(axis=1)))
+        raise ValueError(f"{path.name}: record {rows[worst]['record']} has an electrode "
+                         f"{off[worst].max():.2f} spacings off the {spacing:g} m grid")
+    if snapped.min() < 0:
+        raise ValueError(f"{path.name}: electrodes at negative x are not supported")
+    idx = snapped.astype(int)
+    n_e = int(idx.max()) + 1
+    electrodes = np.column_stack([spacing * np.arange(n_e), np.zeros(n_e)])
+    k = geometric_factor(*(electrodes[idx[:, j]] for j in range(4)))
+    r = np.array([row["r_file"] for row in rows])
+    df = pd.DataFrame({"a": idx[:, 0], "b": idx[:, 1], "m": idx[:, 2], "n": idx[:, 3],
+                       "rhoa": k * r})
+    for col in ("record", "time", "command", "channel", "current_ma", "stack_error",
+                "rhoa_file"):
+        df[col] = [row[col] for row in rows]
+    meta["program"] = rows[0]["program"]
+    if to_m == 1.0:
+        rf = df["rhoa_file"].to_numpy()
+        ok = rf != 0
+        meta["rhoa_file_max_rel_diff"] = float(
+            np.max(np.abs(df["rhoa"][ok] - rf[ok]) / np.abs(rf[ok]))) if ok.any() else 0.0
+    meta["nonpositive"] = int((df["rhoa"] <= 0).sum())
+    out = ERTData(electrodes, df, spacing, "general", meta["program"], meta)
+    for code in _DETECT_ORDER:
+        if out._is_standard(code):
+            out.array = ARRAYS[code]
+            break
+    out.provenance.record("read_stg", path=str(path), array=out.array,
+                          measurements=len(out), nonpositive=meta["nonpositive"])
     if n_electrodes is not None:
         out = out.trim(n_electrodes, first=first_electrode)
     return out

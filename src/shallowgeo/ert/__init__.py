@@ -2,7 +2,8 @@
 
 ``data``
     :class:`ERTData` -- electrodes and four-electrode measurements -- and
-    the RES2DINV ``.dat`` reader and writer, including the repairs a
+    the RES2DINV ``.dat`` reader and writer, the raw SuperSting ``.stg``
+    reader (:func:`read_stg`), including the repairs a
     SuperSting export needs: integer ``n`` and dropping measurements made
     with electrodes past the end of the cable (:meth:`ERTData.trim`), and
     finding readings missing on the cable (:meth:`ERTData.coverage`).
@@ -26,6 +27,7 @@ from .data import (
     geometric_factor,
     median_depth,
     read_res2dinv,
+    read_stg,
     schlumberger,
     wenner,
 )
@@ -33,7 +35,7 @@ from .forward import ERTMesh, apparent_resistivity, forward, make_mesh
 from .inversion import ERTResult, doi_index, lambda_sweep, resistivity_tomography
 
 __all__ = [
-    "ARRAYS", "ERTData", "read_res2dinv", "geometric_factor", "median_depth",
+    "ARRAYS", "ERTData", "read_res2dinv", "read_stg", "geometric_factor", "median_depth",
     "dipole_dipole", "wenner", "schlumberger",
     "ERTMesh", "make_mesh", "forward", "apparent_resistivity",
     "ERTResult", "resistivity_tomography", "lambda_sweep", "doi_index",

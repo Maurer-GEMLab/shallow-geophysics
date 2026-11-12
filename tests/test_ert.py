@@ -18,6 +18,7 @@ from shallowgeo.ert import (
     make_mesh,
     median_depth,
     read_res2dinv,
+    read_stg,
     resistivity_tomography,
     schlumberger,
     wenner,
@@ -327,3 +328,78 @@ class TestInversion:
 def test_ertdata_requires_columns():
     with pytest.raises(ValueError, match="missing"):
         ERTData(np.zeros((4, 2)), pd.DataFrame({"a": [0]}), 1.0)
+
+
+def _stg_line(rec, b, a, m, nn, r, err=3, cur=200.0, spacing=1.0, unit_scale=1.0):
+    """One SuperSting .stg record for electrodes at ``index * spacing``."""
+    pos = [i * spacing * unit_scale for i in (a, b, m, nn)]  # file order A, B, M, N
+    k = float(geometric_factor(*(np.array([[i * spacing, 0.0]]) for i in (a, b, m, nn)))[0])
+    xyz = ",".join(f"{x:12.5E}, 0.00000E+00, 0.00000E+00" for x in pos)
+    return (f"{rec:4d},USER   ,20261111,12:06:20,{r:12.5E},{err:4d},{cur:.0f},"
+            f"{k * r:12.5E},test     ,{xyz},Cmd={rec},HV=258,Cyk=2,MTime=0.8,Gain=1,Ch=1")
+
+
+def _stg_file(tmp_path, rows, *, unit="meter", records=None, spacing=1.0, unit_scale=1.0):
+    head = ("Advanced Geosciences, Inc. SuperSting R8-IP Resistivity meter. S/N: SS0 Type: 3D\n"
+            f"Firmware version: 01.33.78E Survey period: 20261111 Records: "
+            f"{len(rows) if records is None else records}\nUnit: {unit}\n")
+    body = "\n".join(_stg_line(i + 1, *r, spacing=spacing, unit_scale=unit_scale)
+                      for i, r in enumerate(rows))
+    p = tmp_path / "line.stg"
+    p.write_text(head + body + "\n")
+    return p
+
+
+# (b, a, m, n, V/I): dipole-dipole as the SuperSting lays it out, B left of A.
+# Row 3 is negative; row 5 reaches electrode 8, past an 8-electrode cable.
+STG_ROWS = [(0, 1, 2, 3, 4.0), (0, 1, 3, 4, 1.2), (1, 2, 4, 5, -0.05),
+            (1, 2, 6, 7, 0.3), (2, 4, 6, 8, 0.2)]
+
+
+class TestReadStg:
+    def test_reads_positions_resistance_and_extras(self, tmp_path):
+        d = read_stg(_stg_file(tmp_path, STG_ROWS))
+        assert d.array == "dipole-dipole"
+        assert d.n_electrodes == 9 and d.spacing == 1.0
+        assert list(d.data["b"]) == [0, 0, 1, 1, 2]
+        assert np.allclose(d.data["r"], [r[4] for r in STG_ROWS])
+        assert np.allclose(d.data["rhoa"], d.data["k"] * d.data["r"])
+        assert d.metadata["nonpositive"] == 1
+        assert d.metadata["rhoa_file_max_rel_diff"] < 1e-5
+        assert np.allclose(d.data["stack_error"], 0.003)
+        assert (d.data["current_ma"] == 200).all()
+        assert list(d.data["record"]) == [1, 2, 3, 4, 5]
+
+    def test_trim_and_res2dinv_round_trip(self, tmp_path):
+        d = read_stg(_stg_file(tmp_path, STG_ROWS), n_electrodes=8)
+        assert len(d) == 4  # row 5 used electrode 8
+        out = d.drop_nonpositive().to_res2dinv(tmp_path / "line.dat")
+        back = read_res2dinv(out)
+        assert len(back) == 3
+        assert np.allclose(back.data["rhoa"], d.drop_nonpositive().data["rhoa"], rtol=1e-6)
+
+    def test_numbering_is_absolute(self, tmp_path):
+        # Nothing uses electrode 0 or 1: a .dat would renumber from the left-most
+        # used position, the .stg keeps the cable's own numbering.
+        d = read_stg(_stg_file(tmp_path, [(2, 3, 4, 5, 1.0), (2, 3, 5, 6, 0.5)]))
+        assert d.data["b"].iloc[0] == 2 and d.n_electrodes == 7
+
+    def test_feet_are_converted(self, tmp_path):
+        m = read_stg(_stg_file(tmp_path, STG_ROWS, spacing=0.9144))
+        ft = read_stg(_stg_file(tmp_path, STG_ROWS, unit="feet", spacing=0.9144,
+                                unit_scale=1 / 0.3048))
+        assert ft.spacing == pytest.approx(0.9144)
+        assert np.allclose(ft.data["rhoa"], m.data["rhoa"])
+
+    def test_record_count_mismatch_is_an_error(self, tmp_path):
+        with pytest.raises(ValueError, match="header says 9"):
+            read_stg(_stg_file(tmp_path, STG_ROWS, records=9))
+
+    def test_cli_cleans_an_stg_file(self, tmp_path, capsys):
+        p = _stg_file(tmp_path, STG_ROWS)
+        out = tmp_path / "clean.dat"
+        assert cli.main(["ert-clean", str(p), "-e", "8", "-o", str(out)]) == 0
+        printed = capsys.readouterr().out
+        assert "1 with zero or negative" in printed
+        assert "dropped 1 kept readings" in printed
+        assert len(read_res2dinv(out)) == 3

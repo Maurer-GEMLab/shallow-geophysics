@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ert = sub.add_parser(
         "ert-clean",
-        help="repair a RES2DINV .dat file: integer n, drop readings past the cable",
+        help="repair a RES2DINV .dat (or read a SuperSting .stg) file: integer n, "
+             "drop readings past the cable; writes a RES2DINV .dat",
     )
     p_ert.add_argument("path", type=Path)
     p_ert.add_argument("-e", "--electrodes", type=int, required=True,
@@ -80,22 +81,35 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ert-clean":
-        from .ert import read_res2dinv
+        from .ert import read_res2dinv, read_stg
 
+        is_stg = args.path.suffix.lower() == ".stg"
         try:
-            raw = read_res2dinv(args.path)
+            raw = read_stg(args.path) if is_stg else read_res2dinv(args.path)
             clean = raw.trim(args.electrodes, first=args.first)
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         out = args.output or args.path.with_name(f"{args.path.stem}_clean.dat")
-        clean.to_res2dinv(out)
-        print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
-              f"positions; electrodes moved by at most "
-              f"{raw.metadata['snapped_max_m'] * 1000:.1f} mm to the "
-              f"{raw.spacing:g} m grid")
+        if is_stg:
+            print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
+                  f"positions at {raw.spacing:g} m; {raw.metadata['nonpositive']} with "
+                  "zero or negative apparent resistivity")
+        else:
+            print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
+                  f"positions; electrodes moved by at most "
+                  f"{raw.metadata['snapped_max_m'] * 1000:.1f} mm to the "
+                  f"{raw.spacing:g} m grid")
         print(f"kept {len(clean)} readings on electrodes {args.first + 1}-"
               f"{args.first + args.electrodes}, dropped {len(raw) - len(clean)}")
+        written = clean
+        if is_stg:
+            nonpos = int((clean.data["rhoa"] <= 0).sum())
+            if nonpos:
+                written = clean.drop_nonpositive()
+                print(f"dropped {nonpos} kept readings with zero or negative apparent "
+                      "resistivity (RES2DINV inverts the logarithm)")
+        written.to_res2dinv(out)
         cov = clean.coverage()
         n_missing = int(cov["missing"].sum())
         print(f"the kept readings use {len(cov)} array configurations, which fit at "

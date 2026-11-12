@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from .data import ERTData
+from .data import ERTData, _log_colorbar_ticks
 from .forward import ERTMesh, forward, make_mesh, sensitivity
 
 __all__ = ["ERTResult", "resistivity_tomography", "lambda_sweep", "doi_index"]
@@ -222,7 +222,9 @@ class ERTResult:
         ax.set_xlabel("position along line (m)")
         ax.set_ylabel("depth (m)")
         if colorbar:
-            ax.figure.colorbar(im, ax=ax, label=label, shrink=0.8, pad=0.02)
+            cb = ax.figure.colorbar(im, ax=ax, label=label, shrink=0.8, pad=0.02)
+            if field != "change":
+                _log_colorbar_ticks(cb)
         return ax
 
     def plot_pseudosections(self, axes=None, **kwargs):
