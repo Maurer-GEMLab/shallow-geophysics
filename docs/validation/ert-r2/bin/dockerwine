@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stand-in for `wine`: run a Windows exe (first argument, a host path) in the current
+# directory through wine in the linux/amd64 container built from ../Dockerfile.
+# ResIPy calls it as `dockerwine /path/to/R2.exe` from inside the job directory.
+exe="$1"; shift
+exec docker run --rm --platform linux/amd64 \
+  -v "$(pwd)":/work -v "$(dirname "$exe")":/exe:ro -w /work \
+  "${R2_IMAGE:-shallowgeo-r2wine}" wine "/exe/$(basename "$exe")" "$@"

@@ -26,6 +26,19 @@ def main(argv: list[str] | None = None) -> int:
         "--source-offset", type=float, help="shot position along line, metres"
     )
 
+    p_ert = sub.add_parser(
+        "ert-clean",
+        help="repair a RES2DINV .dat (or read a SuperSting .stg) file: integer n, "
+             "drop readings past the cable; writes a RES2DINV .dat",
+    )
+    p_ert.add_argument("path", type=Path)
+    p_ert.add_argument("-e", "--electrodes", type=int, required=True,
+                       help="number of electrodes actually in the ground")
+    p_ert.add_argument("--first", type=int, default=0,
+                       help="index of the first electrode in the ground (default 0)")
+    p_ert.add_argument("-o", "--output", type=Path,
+                       help="output file (default: <name>_clean.dat next to the input)")
+
     args = parser.parse_args(argv)
 
     if args.command == "info":
@@ -65,6 +78,55 @@ def main(argv: list[str] | None = None) -> int:
         print("  provenance:")
         for step in survey.provenance:
             print(f"    {step}")
+        return 0
+
+    if args.command == "ert-clean":
+        from .ert import read_res2dinv, read_stg
+
+        is_stg = args.path.suffix.lower() == ".stg"
+        try:
+            raw = read_stg(args.path) if is_stg else read_res2dinv(args.path)
+            clean = raw.trim(args.electrodes, first=args.first)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        out = args.output or args.path.with_name(f"{args.path.stem}_clean.dat")
+        if is_stg:
+            print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
+                  f"positions at {raw.spacing:g} m; {raw.metadata['nonpositive']} with "
+                  "zero or negative apparent resistivity")
+        else:
+            print(f"{args.path.name}: {len(raw)} readings on {raw.n_electrodes} electrode "
+                  f"positions; electrodes moved by at most "
+                  f"{raw.metadata['snapped_max_m'] * 1000:.1f} mm to the "
+                  f"{raw.spacing:g} m grid")
+        print(f"kept {len(clean)} readings on electrodes {args.first + 1}-"
+              f"{args.first + args.electrodes}, dropped {len(raw) - len(clean)}")
+        written = clean
+        if is_stg:
+            nonpos = int((clean.data["rhoa"] <= 0).sum())
+            if nonpos:
+                written = clean.drop_nonpositive()
+                print(f"dropped {nonpos} kept readings with zero or negative apparent "
+                      "resistivity (RES2DINV inverts the logarithm)")
+        written.to_res2dinv(out)
+        cov = clean.coverage()
+        n_missing = int(cov["missing"].sum())
+        print(f"the kept readings use {len(cov)} array configurations, which fit at "
+              f"{int(cov['possible'].sum())} positions on these electrodes; "
+              f"{n_missing} of them are not in the file")
+        if n_missing:
+            print("  (gaps the file had already; trimming did not make them)")
+            gaps = cov[cov["missing"] > 0]
+            if "dipole" in gaps:
+                for dip, g in gaps.groupby("dipole"):
+                    counts = ", ".join(f"n={r.sep} {r.measured}/{r.possible}"
+                                       for r in g.itertuples())
+                    print(f"  dipole {dip} x {clean.spacing:g} m: {counts}")
+            else:
+                for r in gaps.itertuples():
+                    print(f"  offsets {r.offsets}: {r.measured}/{r.possible}")
+        print(f"wrote {out}")
         return 0
 
     return 1
