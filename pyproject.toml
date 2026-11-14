@@ -44,6 +44,7 @@ atom-atm   = "shallowgeo.drivers.atom_atm:driver"
 cg5        = "shallowgeo.drivers.cg5:driver"
 g857       = "shallowgeo.drivers.g857:driver"
 mag-summary = "shallowgeo.drivers.mag_summary:driver"
+gem2       = "shallowgeo.drivers.gem2:driver"
 
 [project.scripts]
 shallowgeo = "shallowgeo.cli:main"

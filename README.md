@@ -26,12 +26,13 @@ not yet built. See [docs/roadmap.md](docs/roadmap.md).
 | Ground gravity | Scintrex CG-5 | `cg5` | reads; corrections not yet built |
 | Ground magnetics | Geometrics G-857 | `g857` | reads; corrections not yet built |
 | Resistivity (ERT) | AGI SuperSting, RES2DINV `.dat` export | `ert.read_res2dinv` | `shallowgeo.ert`: file repair, 2.5-D forward model, 2-D inversion |
+| EM induction (FDEM) | Geophex GEM-2, exported CSV; hand-carried, sled or drone | `gem2` | `shallowgeo.em`: platform metadata, layered-earth forward model, apparent conductivity, QC, maps |
 
 Station positioning is handled by `shallowgeo.positions`, which consumes
 *corrected* GNSS exports (Emlid Reach, and any CSV whose headers match) — it
 does not process RINEX. See [ADR-003](docs/architecture.md).
 
-GPR, EM, and MT come later; see the
+GPR and MT come later; see the
 [originating concept note](docs/concept-summary.md).
 
 ## Install
@@ -107,6 +108,22 @@ pos = pos.require_status("FIX")                    # gate on status, not RMS
 pos = apply_base_shift(pos, BaseStation.from_csv("ppp_base.csv",
                                                  heights_are="ground_mark"))
 grav = attach_positions(grav, pos)                 # matched on absolute UTC
+```
+
+### EM induction (GEM-2)
+
+```python
+from shallowgeo import em
+
+# The platform is required: the reading depends on the sensor height as
+# much as on the ground, and the file does not record it.
+gem = sg.read("038_7007_gem+inv.csv", platform="handheld")   # or "sled", "drone"
+gem = sg.read("flight.csv", platform="drone", height=agl, sling_length=3.0)  # agl: altimeter, m
+print(gem.deployment)             # height, orientation, offsets -- and what was ASSUMED
+
+gem = em.despike(em.add_distance(gem))
+print(em.noise_table(gem, conductivity=0.02))     # which frequencies are above the noise
+gem = em.add_apparent_conductivity(gem)           # cond_<f> columns, mS/m, half-space
 ```
 
 ### Refraction

@@ -15,13 +15,15 @@ Then interpret it::
     image = sg.surfacewave.dispersion_image(refraction)
 
 Scope of this release: seismic refraction, MASW and passive surface wave,
-ground gravity, ground magnetics, and 2-D resistivity (ERT).
+ground gravity, ground magnetics, 2-D resistivity (ERT), and
+frequency-domain EM induction (GEM-2).
 """
 
 from . import (
     core,
     datasets,
     drivers,
+    em,
     ert,
     magnetics,
     positions,
@@ -44,7 +46,7 @@ from .positions import PositionTable, read_positions
 __version__ = "0.0.1.dev0"
 
 __all__ = [
-    "core", "datasets", "drivers", "ert", "magnetics", "positions", "potentialfields",
+    "core", "datasets", "drivers", "em", "ert", "magnetics", "positions", "potentialfields",
     "refraction", "surfacewave",
     "read", "identify",
     "read_positions", "PositionTable",
