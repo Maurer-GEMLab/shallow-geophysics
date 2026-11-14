@@ -8,7 +8,7 @@ One directory per dataset, laid out as below.
 | [`2610234-ert-line/`](2610234-ert-line/) | ERT | AGI SuperSting, 42 electrodes at 3 ft, dipole-dipole, RES2DINV `.dat`. Kept as a teaching example of data that fail QC |
 | [`2026-09-25-srt-line/`](2026-09-25-srt-line/) | Refraction tomography | 24-channel, 3 ft spacing, 69 ft spread, 16 shots (every other geophone plus off-ends) in one multi-record Geode SEG-Y, feet |
 | [`2026-11-11-ert-line/`](2026-11-11-ert-line/) | ERT | AGI SuperSting, 21 electrodes at 2 ft, dipole-dipole, `.stg` plus RES2DINV `.dat`, trimmed to the 184 readings on the cable. Clean: fits to chi² ≈ 1 |
-| [`gem2-038-em-lines/`](gem2-038-em-lines/) | EM induction | Geophex GEM-2, hand-carried (inferred), six frequencies 450 Hz-63 kHz, five short lines, CSV export plus raw GPS log. Platform and date not recorded; zero-level offsets and a failed vendor inversion documented |
+| [`2026-11-11-em-handheld/`](2026-11-11-em-handheld/) | EM induction | Geophex GEM-2 hand-carried at ~1 m, HCP, six frequencies 450 Hz-63 kHz, five short lines over a sand trap (S&T old golf course), CSV export plus raw GPS log. Zero-level offsets and a failed vendor inversion documented |
 
 ```
 examples/data/

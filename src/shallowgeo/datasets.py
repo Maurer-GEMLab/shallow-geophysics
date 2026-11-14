@@ -33,7 +33,7 @@ EXAMPLES = {
     "2026-09-25-srt-line": "16 shots, every other geophone, 69 ft spread (tomography)",
     "2610234-ert-line": "SuperSting dipole-dipole, 42 electrodes at 3 ft, RES2DINV .dat (ERT)",
     "2026-11-11-ert-line": "SuperSting dipole-dipole, 21 electrodes at 2 ft, .stg and .dat (ERT)",
-    "gem2-038-em-lines": "GEM-2 hand-carried, 6 frequencies, 5 short lines, CSV export (EM)",
+    "2026-11-11-em-handheld": "GEM-2 hand-carried at 1 m, HCP, 6 frequencies, 5 lines over a sand trap (EM)",
 }
 
 REPO_ARCHIVE = "https://github.com/Maurer-GEMLab/shallow-geophysics/archive/refs/heads/main.zip"

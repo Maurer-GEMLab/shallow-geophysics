@@ -15,7 +15,7 @@ from shallowgeo.drivers.gem2 import parse_header_line, read_gem2, read_gem2_gps
 from shallowgeo.em import plotting
 
 S = 1.66
-EXAMPLE = (Path(__file__).parents[1] / "examples" / "data" / "gem2-038-em-lines"
+EXAMPLE = (Path(__file__).parents[1] / "examples" / "data" / "2026-11-11-em-handheld"
            / "raw")
 
 HEADER = ("#File:001_7007.GPX,Exporter:1.45,Time:18:56-18:57,6 Samples, 2 GPS,"
@@ -283,12 +283,15 @@ def test_plots_run():
 
 @pytest.mark.skipif(not EXAMPLE.is_dir(), reason="example dataset not present")
 def test_example_dataset_matches_vendor_conductivity():
-    s = sg.read(EXAMPLE / "038_7007_gem+inv.csv", platform="handheld")
+    s = sg.read(EXAMPLE / "038_7007_gem+inv.csv", platform="handheld",
+                sensor_height=1.0, orientation="HCP", date="2026-11-11")
     assert len(s) == 492 and s.lines == [1, 2, 3, 4, 5]
     assert s.metadata["samples_in_header"] == 526
+    assert s.readings["time"].iloc[0] == pd.Timestamp("2026-11-11 18:56:36.5825", tz="UTC")
+    assert s.deployment.assumed == ("gps_offset",)
     s = em.add_apparent_conductivity(em.despike(s), [5310, 18030])
-    # Geophex's own apparent conductivity is the half-space value for HCP
-    # coils 1 m up: reproducing it is how the deployment was inferred.
+    # Hand-carried, HCP, ~1 m (field notes). Geophex's own apparent
+    # conductivity is the half-space value for exactly that deployment.
     for f in (5310, 18030):
         ratio = s.readings[f"cond_{f}"] / s.vendor[f"econd_{f}_mS_m"]
         assert np.nanmedian(ratio) == pytest.approx(1.0, abs=0.02)

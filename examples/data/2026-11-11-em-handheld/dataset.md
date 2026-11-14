@@ -1,25 +1,28 @@
-# GEM-2 file 038: five short hand-carried EM lines
+# Hand-carried GEM-2 over a sand trap, 2026-11-11
 
-One Geophex GEM-2 survey, about 2.5 minutes long: five roughly parallel
-lines, 15-23 m long and 2-4 m apart, walked in alternating directions with
-six frequencies logging at once. It is the EM example for
-[`notebooks/em_gem2.ipynb`](../../../notebooks/em_gem2.ipynb). The
-instrument works well at 5-63 kHz. The data are also a good teaching case
-for three GEM-2 problems: frequencies below the noise, zero-level offsets,
-and a vendor inversion that does not fit its own data.
+One Geophex GEM-2 survey (file 038), about 2.5 minutes long: five roughly
+parallel lines, 15-23 m long and 2-4 m apart, walked in alternating
+directions over a sand trap on the S&T old golf course, with six
+frequencies logging at once. The ski was hand-carried about 1 m above the
+ground, lying flat (HCP). It is the hand-carried EM example for
+[`notebooks/em_gem2.ipynb`](../../../notebooks/em_gem2.ipynb).
+
+The instrument works well at 5-63 kHz. The data are also a good teaching
+case for three GEM-2 problems: frequencies below the noise, zero-level
+offsets, and a vendor inversion that does not fit its own data.
 
 
 ## The survey
 
 | Field | Value |
 |---|---|
-| Site | Near 37.9479 N, 91.7862 W (Rolla, MO). Site name *not recorded* |
-| Date, crew | **Date not recorded**: the export has times but no date. 18:56:36-18:59:02 UTC. Crew *not recorded* |
-| Purpose | Ground-conductivity mapping (EM induction) |
+| Site | S&T old golf course, Rolla, MO, over a sand trap; near 37.9479 N, 91.7862 W. The same site as the ERT example [`2026-11-11-ert-line`](../2026-11-11-ert-line/dataset.md), whose resistive body is a sand trap. The files do not say whether the two surveys crossed the same trap or where its edges are |
+| Date, crew | **2026-11-11** (Wednesday; field notes; the export itself has times but no date), 18:56:36-18:59:02 UTC = 12:56-12:59 CST, about 20 minutes after the ERT line finished. Crew *not recorded* |
+| Purpose | Ground-conductivity mapping (EM induction) over a sand trap |
 | Instrument, firmware | Geophex GEM-2, serial G2-000-7007, firmware `ARMEN.230101.31` (from the header line) |
 | Export format | `038_7007_gem+inv.csv`: Geophex exporter 1.45, latitude/longitude, with the GEM-2 software's apparent conductivity, susceptibility and three-layer inversion appended. `038_7007_gps.csv`: the raw `$GPGGA` sentences, one per second, with the instrument's time stamp |
-| Coils | 1.66 m transmitter-receiver separation (GEM-2 ski). Orientation **not recorded**; HCP (ski flat) inferred, see below |
-| Platform, height | **Not recorded.** Read as **hand-carried, about 1 m above the ground** (see "How the platform was inferred") |
+| Coils | 1.66 m transmitter-receiver separation (GEM-2 ski), **horizontal coplanar (HCP)**: ski flat (field notes) |
+| Platform, height | **Hand-carried, about 1 m above the ground** (field notes). Confirmed by the GEM-2 software's own numbers; see below |
 | Frequencies | 450, 1530, 5310, 8850, 18 030, 63 030 Hz |
 | Sampling | 166.7 ms (6 Hz: five 30 Hz base periods per output sample); 492 samples in the file, on lines 1-5 (108, 102, 102, 90, 90) |
 | Lines | Roughly parallel, azimuth about 55-60 degrees, walked alternately north-east and south-west; line 5 is shorter and at the west end. Lines are numbered in the order walked |
@@ -37,15 +40,18 @@ and a vendor inversion that does not fit its own data.
 from shallowgeo.datasets import example_data
 from shallowgeo.drivers.gem2 import read_gem2, read_gem2_gps
 
-raw = example_data("gem2-038-em-lines")
-survey = read_gem2(raw / "038_7007_gem+inv.csv", platform="handheld")  # HCP, 1 m
-gps = read_gem2_gps(raw / "038_7007_gps.csv")                          # 86 fixes
+raw = example_data("2026-11-11-em-handheld")
+survey = read_gem2(raw / "038_7007_gem+inv.csv", platform="handheld",
+                   sensor_height=1.0, orientation="HCP", date="2026-11-11")
+gps = read_gem2_gps(raw / "038_7007_gps.csv", date="2026-11-11")   # 86 fixes
 ```
 
-## How the platform was inferred
+## The platform, and a check on it
 
-Nothing in the files says how the ski was carried. Three things point to
-hand-carried, HCP, at about 1 m:
+The files do not say how the ski was carried; the field notes do
+(hand-carried, HCP, about 1 m). Before those notes were to hand, the
+platform was inferred from the data, and the inference agrees with them —
+which is the check worth teaching for a survey whose notes are lost:
 
 - the walking speed (0.9-1.4 m/s) and a GPS altitude that stays within
   2 m of 340 m (not a drone);
@@ -57,7 +63,6 @@ hand-carried, HCP, at about 1 m:
   ppm of in-phase, which matches the static HCP response at about 1 m
   (−0.010 × 10⁻³ SI per ppm at 1.0 m). Below 0.59 m the sign would flip.
 
-If you know otherwise, change `platform=` and `sensor_height=`.
 
 ## Known problems
 
@@ -79,7 +84,8 @@ If you know otherwise, change `platform=` and `sensor_height=`.
   from 31.8 mS/m (line 1) to 28.8 mS/m (line 5), about 1 mS/m per minute,
   while the internal temperature rose 5 °C. The lines were walked in order
   across the site, so a trend in time is also a trend in space. No line was
-  repeated.
+  repeated. The sand trap may account for some of it (sand is resistive),
+  but where its edges are relative to the lines was not recorded.
 - **Transient at the start of line 3.** Samples 1-7 read about −38 000 to
   −8000 ppm in-phase on every frequency, recovering over 1.3 s, with the
   quadrature low too. Line 2 ended at the same spot six seconds earlier with
@@ -103,6 +109,6 @@ If you know otherwise, change `platform=` and `sensor_height=`.
 
 At 63 kHz, with the transient and spikes removed, apparent conductivity is
 26-34 mS/m (about 30-40 Ω·m), higher at the north-east ends of lines 1-3
-and lower towards the north-west (lines 4-5) — with the caveat that this
-trend is also the order in time. At 18 kHz the pattern is the same at
+and lower towards the north-west (lines 4-5). The lower values could be the
+sand trap, but that trend is also the order in time (see Known problems). At 18 kHz the pattern is the same at
 18-27 mS/m; the difference in level is the offsets.

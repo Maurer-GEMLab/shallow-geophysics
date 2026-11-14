@@ -156,7 +156,7 @@ An enabled capability, not a solved problem.
   investigation; half-space apparent conductivity with per-sample heights
 - [x] QC and processing: noise per channel, despike, heading check, zero
   levels, GPS layback, drone heights from altitude, gridding
-- [x] `notebooks/em_gem2.ipynb` on `examples/data/gem2-038-em-lines/`
+- [x] `notebooks/em_gem2.ipynb` on `examples/data/2026-11-11-em-handheld/`
 - [ ] 1-D layered inversion of multi-frequency data (stitched sections),
   once a dataset has free-air zero levels; the canonical-grid projection
   (ADR-001) for joint use
