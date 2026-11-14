@@ -344,29 +344,27 @@ def _stg_line(rec, b, a, m, nn, r, err=3, cur=200.0, spacing=1.0, unit_scale=1.0
 class TestCleanExampleLine:
     """2026-11-11-ert-line: the numbers its dataset.md quotes."""
 
-    def test_raw_stg_runs_past_the_cable(self):
+    def test_files_hold_only_the_21_electrodes(self):
         d = read_stg(CLEAN_LINE / "111126.stg")
-        assert len(d) == 633 and d.n_electrodes == 87
+        assert len(d) == 184 and d.n_electrodes == 21
         assert d.spacing == pytest.approx(0.6096)
-        assert d.metadata["nonpositive"] == 201
+        assert d.metadata["records_in_header"] == 184
+        assert len(read_res2dinv(CLEAN_LINE / "111126.dat")) == 184
 
-    def test_on_the_cable_it_is_complete_and_positive(self):
-        d = read_stg(CLEAN_LINE / "111126.stg", n_electrodes=21)
-        assert len(d) == 184
+    def test_complete_and_positive(self):
+        d = read_stg(CLEAN_LINE / "111126.stg")
+        assert d.metadata["nonpositive"] == 0
         assert (d.data["rhoa"] > 0).all()
         assert d.data["stack_error"].max() < 0.03
         assert d.coverage()["missing"].sum() == 0
         assert sorted(d.data.loc[d.data["current_ma"] < 10, "record"]) == [171, 239]
 
-    def test_dat_export_agrees_on_the_cable(self):
-        stg = read_stg(CLEAN_LINE / "111126.stg", n_electrodes=21).data
-        dat = read_res2dinv(CLEAN_LINE / "111126.dat", n_electrodes=21).data
-        assert len(read_res2dinv(CLEAN_LINE / "111126.dat")) == 431
-        key = list("abmn")
-        merged = stg.merge(dat, on=key, suffixes=("_stg", "_dat"))
+    def test_dat_export_agrees_with_the_stg(self):
+        stg = read_stg(CLEAN_LINE / "111126.stg").data
+        dat = read_res2dinv(CLEAN_LINE / "111126.dat").data
+        merged = stg.merge(dat, on=list("abmn"), suffixes=("_stg", "_dat"))
         assert len(merged) == len(stg) == len(dat)
         assert np.allclose(merged["rhoa_stg"], merged["rhoa_dat"], rtol=1e-5)
-
 
 def _stg_file(tmp_path, rows, *, unit="meter", records=None, spacing=1.0, unit_scale=1.0):
     head = ("Advanced Geosciences, Inc. SuperSting R8-IP Resistivity meter. S/N: SS0 Type: 3D\n"
