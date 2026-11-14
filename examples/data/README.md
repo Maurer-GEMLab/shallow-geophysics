@@ -7,6 +7,7 @@ One directory per dataset, laid out as below.
 | [`2026-09-18-refraction-line/`](2026-09-18-refraction-line/) | Refraction | 24-channel, 4 ft spacing, 92 ft spread, 13 shots from 8 positions, Geode SEG-Y in feet |
 | [`2610234-ert-line/`](2610234-ert-line/) | ERT | AGI SuperSting, 42 electrodes at 3 ft, dipole-dipole, RES2DINV `.dat`. Kept as a teaching example of data that fail QC |
 | [`2026-09-25-srt-line/`](2026-09-25-srt-line/) | Refraction tomography | 24-channel, 3 ft spacing, 69 ft spread, 16 shots (every other geophone plus off-ends) in one multi-record Geode SEG-Y, feet |
+| [`2026-11-11-ert-line/`](2026-11-11-ert-line/) | ERT | AGI SuperSting, 21 electrodes at 2 ft, dipole-dipole, raw `.stg` plus RES2DINV `.dat`. Clean: fits to chi² ≈ 1 once trimmed to the cable |
 
 ```
 examples/data/

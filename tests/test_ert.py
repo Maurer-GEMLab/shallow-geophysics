@@ -27,6 +27,7 @@ from shallowgeo.ert.forward import wavenumbers
 
 EXAMPLE = (Path(__file__).resolve().parents[1]
            / "examples/data/2610234-ert-line/raw/2610234.dat")
+CLEAN_LINE = Path(__file__).resolve().parents[1] / "examples/data/2026-11-11-ert-line/raw"
 
 SUPERSTING_HEADER = "Sting/Swift prg: test\n  0.91440\n3\n{n}\n1\n0\n"
 # Dipole-dipole rows as the SuperSting writes them: single-precision noise
@@ -337,6 +338,34 @@ def _stg_line(rec, b, a, m, nn, r, err=3, cur=200.0, spacing=1.0, unit_scale=1.0
     xyz = ",".join(f"{x:12.5E}, 0.00000E+00, 0.00000E+00" for x in pos)
     return (f"{rec:4d},USER   ,20261111,12:06:20,{r:12.5E},{err:4d},{cur:.0f},"
             f"{k * r:12.5E},test     ,{xyz},Cmd={rec},HV=258,Cyk=2,MTime=0.8,Gain=1,Ch=1")
+
+
+@pytest.mark.skipif(not CLEAN_LINE.exists(), reason="example dataset not present")
+class TestCleanExampleLine:
+    """2026-11-11-ert-line: the numbers its dataset.md quotes."""
+
+    def test_raw_stg_runs_past_the_cable(self):
+        d = read_stg(CLEAN_LINE / "111126.stg")
+        assert len(d) == 633 and d.n_electrodes == 87
+        assert d.spacing == pytest.approx(0.6096)
+        assert d.metadata["nonpositive"] == 201
+
+    def test_on_the_cable_it_is_complete_and_positive(self):
+        d = read_stg(CLEAN_LINE / "111126.stg", n_electrodes=21)
+        assert len(d) == 184
+        assert (d.data["rhoa"] > 0).all()
+        assert d.data["stack_error"].max() < 0.03
+        assert d.coverage()["missing"].sum() == 0
+        assert sorted(d.data.loc[d.data["current_ma"] < 10, "record"]) == [171, 239]
+
+    def test_dat_export_agrees_on_the_cable(self):
+        stg = read_stg(CLEAN_LINE / "111126.stg", n_electrodes=21).data
+        dat = read_res2dinv(CLEAN_LINE / "111126.dat", n_electrodes=21).data
+        assert len(read_res2dinv(CLEAN_LINE / "111126.dat")) == 431
+        key = list("abmn")
+        merged = stg.merge(dat, on=key, suffixes=("_stg", "_dat"))
+        assert len(merged) == len(stg) == len(dat)
+        assert np.allclose(merged["rhoa_stg"], merged["rhoa_dat"], rtol=1e-5)
 
 
 def _stg_file(tmp_path, rows, *, unit="meter", records=None, spacing=1.0, unit_scale=1.0):
