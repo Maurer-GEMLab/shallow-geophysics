@@ -92,8 +92,8 @@ result = resistivity_tomography(d)
 The image shows a resistive body (several hundred to about 1500 Ω·m) in the
 top 0.8 m between x ≈ 1.8 and 5 m, over a conductive layer (15-30 Ω·m) from
 about 1 m down along the whole line, more conductive with depth under the
-right half. Under the rest of the line the top metre is 30-100 Ω·m. What the
-resistive body is (a dry fill, gravel, a buried object) needs the site
-description.
+right half. Under the rest of the line the top metre is 30-100 Ω·m.
+The resistive body is a sand trap.
+
 [`notebooks/ert_supersting.ipynb`](../../../notebooks/ert_supersting.ipynb)
 runs on this line: set `DATA` to `raw/111126.dat` and `N_ELECTRODES` to 21.
