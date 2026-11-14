@@ -11,6 +11,7 @@ both in Colab and on a local kernel from `pixi run -e dev jupyter lab`.
 | `refraction_tomography.ipynb` | Refraction tomography: two-pass picking, reciprocal-time check, shortest-path rays, Gauss-Newton inversion that finds mispicks and guides re-picking, velocity image with coverage, choosing λ, synthetic resolution test, optional pyGIMLi cross-check | `examples/data/2026-09-25-srt-line/` (16 shots, one multi-record SEG-Y), or the student's own dense line |
 | `magnetics_field_data.ipynb` | Ground magnetics from a per-station table: diurnal correction from base-station re-occupations (or dropping an unverifiable correction column), repeat-reading QC, profile per line, all lines in plan view, contour map of the anomaly with and without noisy stations | A synthetic survey with base-station readings (`magnetics.synthetic_table`), or the student's own table, uploaded |
 | `ert_supersting.ipynb` | Resistivity (ERT) end to end: read a SuperSting RES2DINV file, repair non-integer *n* and drop readings past the end of the cable, geometric factors and pseudosections, 2.5-D forward model, inversion of synthetic data with the line's own scheme, choosing λ, depth of investigation, checks that show the field data cannot be a ground response, and the failed field inversion | `examples/data/2610234-ert-line/` (42 electrodes, dipole-dipole), or the student's own `.dat` file |
+| `em_gem2.ipynb` | EM induction with a GEM-2: the platform (hand, sled, drone) and why its height matters, acquisition QC, signal against noise per frequency, transients and spikes, what frequency does and does not do (induction number, cumulative response), apparent conductivity checked against the instrument's own, zero-level offsets, drift, heading check, maps and profiles, judging the vendor's layered inversion | `examples/data/gem2-038-em-lines/` (five hand-carried lines, six frequencies), or the student's own GEM-2 export |
 | `gravity_magnetics_tunnel.ipynb` | Gravity and magnetics forward and inverse problem for a 2-D tunnel (4 × 3 m, roof 4 m deep under 1 m of soil): why flat layers are invisible, prism kernels, what one station sees, noise, non-uniqueness, depth weighting, choosing β, bounds, compact (minimum-support) inversion, what the data do and do not determine | synthetic (`potentialfields`) |
 | `passive_shear_wave_colab.ipynb` | Passive surface wave end to end: read and merge ATOM-1C `.atm` nodes, QC, array resolution limits, SPAC and passive-MASW dispersion, pick, invert for Vs | ATOM-1C field data, uploaded by the student |
 
@@ -83,3 +84,18 @@ readings from electrodes that were not in the ground looking like the rest —
 and the inversion then fails to fit them. The working inversion is shown on
 synthetic data recorded with the same 214 measurements. It runs in about a
 minute and a half.
+
+
+## A note on `em_gem2.ipynb`
+
+The reader will not run without `platform=`: a GEM-2 carried at 1 m reads
+64 % of what it reads on a sled at 0.25 m over the same ground, and in HCP
+the in-phase from magnetic soil changes sign in between. The example's
+platform was not written down; the notebook shows how it was inferred (the
+GEM-2 software's own conductivities are exactly the HCP, 1 m half-space
+values). Like the ERT and passive notebooks, it is built to say no where the
+data do: the two lowest frequencies are below the noise, the frequencies
+disagree about the conductivity level because of zero-level offsets (all six
+are at a low induction number, so it cannot be depth), and the vendor's
+layered inversion misfits its own data by over 100 %. It runs in a few
+seconds.

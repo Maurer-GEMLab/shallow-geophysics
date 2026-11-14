@@ -145,9 +145,26 @@ The layer that justifies the project. Cross-gradient structural coupling
 between velocity, density, and susceptibility on the canonical grid.
 An enabled capability, not a solved problem.
 
+## EM induction (GEM-2) ✅ readers and interpretation
+
+- [x] `gem2` driver for the Geophex exporter CSV, and the raw `$GPGGA` log
+- [x] `em.Deployment`: platform (handheld / sled / drone), sensor height,
+  orientation, GPS offset, tow distance, sling length -- required, with
+  every defaulted value listed as assumed
+- [x] Layered-earth FDEM forward model at any height, HCP and VCP, checked
+  against Wait's closed form; LIN formulas, cumulative response, depth of
+  investigation; half-space apparent conductivity with per-sample heights
+- [x] QC and processing: noise per channel, despike, heading check, zero
+  levels, GPS layback, drone heights from altitude, gridding
+- [x] `notebooks/em_gem2.ipynb` on `examples/data/gem2-038-em-lines/`
+- [ ] 1-D layered inversion of multi-frequency data (stitched sections),
+  once a dataset has free-air zero levels; the canonical-grid projection
+  (ADR-001) for joint use
+- [ ] Other instruments (EM31, EM38, CMD) as profiles of the same reader
+
 ## Deferred
 
-GUI (Layer 4), GPR, EM, MT, live instrument control. See
+GUI (Layer 4), GPR, MT, live instrument control. See
 [concept-summary.md](concept-summary.md).
 
 ## Field-procedure notes from the validation data
