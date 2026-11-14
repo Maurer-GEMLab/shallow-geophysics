@@ -16,7 +16,7 @@ offsets, and a vendor inversion that does not fit its own data.
 
 | Field | Value |
 |---|---|
-| Site | S&T old golf course, Rolla, MO, over a sand trap; near 37.9479 N, 91.7862 W. The same site as the ERT example [`2026-11-11-ert-line`](../2026-11-11-ert-line/dataset.md), whose resistive body is a sand trap. The files do not say whether the two surveys crossed the same trap or where its edges are |
+| Site | S&T old golf course, Rolla, MO, over a sand trap; near 37.9479 N, 91.7862 W. The same general area as the ERT example [`2026-11-11-ert-line`](../2026-11-11-ert-line/dataset.md) (line 111126), whose resistive body is a sand trap. The ERT line has no GPS positions and the trap's edges were not surveyed, so where the ERT line lies relative to these EM lines is not known |
 | Date, crew | **2026-11-11** (Wednesday; field notes; the export itself has times but no date), 18:56:36-18:59:02 UTC = 12:56-12:59 CST, about 20 minutes after the ERT line finished. Crew *not recorded* |
 | Purpose | Ground-conductivity mapping (EM induction) over a sand trap |
 | Instrument, firmware | Geophex GEM-2, serial G2-000-7007, firmware `ARMEN.230101.31` (from the header line) |
@@ -104,6 +104,29 @@ which is the check worth teaching for a survey whose notes are lost:
 - **Power-line column units.** Labelled nT in the export; the GEM-2 manual
   describes the power-line column in milligauss. Values 0.8-4.2, steady:
   no power-line problem either way.
+
+## Comparison with the ERT line
+
+The ERT image from the same area (line 111126) has resistive sand (several
+hundred to 1500 Ω·m) in the top 0.8 m over the trap, 30-100 Ω·m in the top
+metre elsewhere, and a conductive layer (15-30 Ω·m) below about 1 m.
+`em.layered_response` gives what the GEM-2 would read over those models, at
+63 kHz with HCP coils 1 m up:
+
+| Model, from the ERT image | 63 kHz apparent conductivity |
+|---|---|
+| Off the trap: 50 Ω·m top 1 m over 20 Ω·m | 33 mS/m |
+| Off the trap: 100 Ω·m top 1 m over 30 Ω·m | 21 mS/m |
+| On the trap: 1000 Ω·m top 0.8 m over 20 Ω·m | 27 mS/m |
+| On the trap: 300 Ω·m top 0.8 m over 30 Ω·m | 20 mS/m |
+
+The measured 26-34 mS/m is within that range, so the 63 kHz level is
+consistent with the ERT, even though its zero-level offset is not known.
+The lower frequencies, whose levels are set mostly by their offsets, are
+not. The table also shows why the trap is a subtle EM target: from 1 m up,
+only 34 % of an HCP reading comes from the top 0.8 m. A metre of dry sand
+lowers the apparent conductivity by about 6 mS/m, about the same as the
+change along the lines and the drift over the survey.
 
 ## Expected result
 
