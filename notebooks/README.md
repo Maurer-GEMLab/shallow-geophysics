@@ -11,6 +11,7 @@ both in Colab and on a local kernel from `pixi run -e dev jupyter lab`.
 | `refraction_tomography.ipynb` | Refraction tomography: two-pass picking, reciprocal-time check, shortest-path rays, Gauss-Newton inversion that finds mispicks and guides re-picking, velocity image with coverage, choosing λ, synthetic resolution test, optional pyGIMLi cross-check | `examples/data/2026-09-25-srt-line/` (16 shots, one multi-record SEG-Y), or the student's own dense line |
 | `magnetics_field_data.ipynb` | Ground magnetics from a per-station table: diurnal correction from base-station re-occupations (or dropping an unverifiable correction column), repeat-reading QC, profile per line, all lines in plan view, contour map of the anomaly with and without noisy stations | A synthetic survey with base-station readings (`magnetics.synthetic_table`), or the student's own table, uploaded |
 | `ert_supersting.ipynb` | Resistivity (ERT) end to end: read a SuperSting RES2DINV file, repair non-integer *n* and drop readings past the end of the cable, geometric factors and pseudosections, 2.5-D forward model, inversion of synthetic data with the line's own scheme, choosing λ, depth of investigation, checks that show the field data cannot be a ground response, and the failed field inversion | `examples/data/2610234-ert-line/` (42 electrodes, dipole-dipole), or the student's own `.dat` file |
+| `ert_synthetic_inversion.ipynb` | Resistivity forward and inverse problem on synthetic ground: an air-filled cave in layered soil, clay and limestone, and soil over pinnacled, karsted limestone with a sinkhole throat and a small void; noisy synthetic data from a finer mesh (no inverse crime); a λ slider comparing true against inverted resistivity and observed against predicted data; χ², L-curve and the truth's own model error; what a smooth inversion cannot recover; a live inversion with λ and vertical smoothing | synthetic (`ert`) |
 | `em_gem2.ipynb` | EM induction with a GEM-2: the platform (hand, sled, drone) and why its height matters, acquisition QC, signal against noise per frequency, transients and spikes, what frequency does and does not do (induction number, cumulative response), apparent conductivity checked against the instrument's own, zero-level offsets, drift, heading check, maps and profiles, judging the vendor's layered inversion | `examples/data/2026-11-11-em-handheld/` (five hand-carried lines over a sand trap, six frequencies), or the student's own GEM-2 export |
 | `gravity_magnetics_tunnel.ipynb` | Gravity and magnetics forward and inverse problem for a 2-D tunnel (4 × 3 m, roof 4 m deep under 1 m of soil): why flat layers are invisible, prism kernels, what one station sees, noise, non-uniqueness, depth weighting, choosing β, bounds, compact (minimum-support) inversion, what the data do and do not determine | synthetic (`potentialfields`) |
 | `passive_shear_wave_colab.ipynb` | Passive surface wave end to end: read and merge ATOM-1C `.atm` nodes, QC, array resolution limits, SPAC and passive-MASW dispersion, pick, invert for Vs | ATOM-1C field data, uploaded by the student |
@@ -99,3 +100,19 @@ disagree about the conductivity level because of zero-level offsets (all six
 are at a low induction number, so it cannot be depth), and the vendor's
 layered inversion misfits its own data by over 100 %. It runs in a few
 seconds.
+
+
+## A note on `ert_synthetic_inversion.ipynb`
+
+The companion to `ert_supersting.ipynb`, with the answer known. Both models
+are written as `rho(X, Z)` functions whose numbers sit in two dictionaries,
+so students can move the cave, fill it with water or write their own ground.
+The data are computed on a mesh four times finer than the inversion grid.
+Every λ is inverted to convergence rather than stopped at χ² = 1, so the
+slider shows what λ alone does: at 0.1 the cave grows spurious resistive
+neighbours while χ² falls below 1, and at 1000 it is a faint smear. Because
+the truth is known, the notebook plots the image's own error against λ: it
+is U-shaped, and χ² = 1 lands slightly on the smooth side of its minimum.
+The λ sweep (nine inversions per model) takes about three minutes; after
+that the slider only looks results up. Each run of the live inversion in
+the last section takes a few seconds.
