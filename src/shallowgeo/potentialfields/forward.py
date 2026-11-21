@@ -34,18 +34,30 @@ prism. Units of the kernel: nT per SI susceptibility.
 
 ``x`` is along the profile and ``z`` is depth (down); stations are at
 ``height`` metres above flat ground.
+
+3-D gravity
+-----------
+:func:`gravity_kernel_3d` does the same for a :class:`Mesh3D` of
+rectangular prisms under a map of stations. The vertical attraction of a
+prism is the corner sum (Plouff, 1976; Nagy et al., 2000; Blakely, 1995)
+
+    g_z = G rho  sum_ijk  mu_ijk [ z atan(x y / (z r)) - x ln(r + y) - y ln(r + x) ]
+
+with ``x, y, z`` from the station to each corner and ``mu = +-1``
+alternating from corner to corner.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from .mesh import Mesh2D
+from .mesh import Mesh2D, Mesh3D
 
 __all__ = [
     "GRAVITATIONAL_CONSTANT",
     "field_direction",
     "gravity_kernel",
+    "gravity_kernel_3d",
     "magnetic_kernel",
 ]
 
@@ -84,6 +96,32 @@ def gravity_kernel(mesh: Mesh2D, x, height=0.2) -> np.ndarray:
         return 0.5 * dx * np.log(r2) + z * np.arctan2(dx, z)
 
     return 2 * GRAVITATIONAL_CONSTANT * _MGAL_PER_GCC * _corner_sum(f, mesh, x, height)
+
+
+def gravity_kernel_3d(mesh: Mesh3D, x, y, height=0.2, *, chunk: int = 32) -> np.ndarray:
+    """Vertical gravity, mGal, at stations ``(x, y)`` per g/cm^3 in each prism.
+
+    ``x``, ``y`` and ``height`` are flattened to one value per station. The
+    result is ``(n_stations, n_cells)`` -- for a few hundred stations and a
+    few tens of thousands of cells, tens of megabytes. ``chunk`` stations are
+    done at a time to keep the working memory down.
+    """
+    x, y = np.broadcast_arrays(np.asarray(x, dtype=float).ravel(),
+                               np.asarray(y, dtype=float).ravel())
+    _, height = _stations(x, height)
+    out = np.empty((x.size, mesh.n_cells))
+    for a in range(0, x.size, chunk):
+        b = min(a + chunk, x.size)
+        X = mesh.x_edges[None, None, None, :] - x[a:b, None, None, None]
+        Y = mesh.y_edges[None, None, :, None] - y[a:b, None, None, None]
+        Z = mesh.z_edges[None, :, None, None] + height[a:b, None, None, None]
+        R = np.sqrt(X**2 + Y**2 + Z**2)
+        v = Z * np.arctan2(X * Y, Z * R) - X * np.log(R + Y) - Y * np.log(R + X)
+        v = np.diff(np.diff(np.diff(v, axis=3), axis=2), axis=1)
+        out[a:b] = v.reshape(b - a, -1)
+    # With z positive down this corner sum is the downward pull itself, so a
+    # mass excess gives a positive anomaly, as in the 2-D kernel.
+    return GRAVITATIONAL_CONSTANT * _MGAL_PER_GCC * out
 
 
 def field_direction(inclination: float, declination: float = 0.0,
