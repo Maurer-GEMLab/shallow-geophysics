@@ -8,6 +8,7 @@ One directory per dataset, laid out as below.
 | [`2610234-ert-line/`](2610234-ert-line/) | ERT | AGI SuperSting, 42 electrodes at 3 ft, dipole-dipole, RES2DINV `.dat`. Kept as a teaching example of data that fail QC |
 | [`2026-09-25-srt-line/`](2026-09-25-srt-line/) | Refraction tomography | 24-channel, 3 ft spacing, 69 ft spread, 16 shots (every other geophone plus off-ends) in one multi-record Geode SEG-Y, feet |
 | [`2026-11-11-ert-line/`](2026-11-11-ert-line/) | ERT | AGI SuperSting, 21 electrodes at 2 ft, dipole-dipole, `.stg` plus RES2DINV `.dat`, trimmed to the 184 readings on the cable. Clean: fits to chi² ≈ 1 |
+| [`2018-09-06-usgs-crp-line/`](2018-09-06-usgs-crp-line/) | ERT (towed) | USGS continuous resistivity profiling on the Des Moines River: SuperSting towing an 11-electrode streamer at 10 m, line 3000 (0.95 km, 2560 readings), gridded to a RES2DINV `.dat` by `read_crp`. Only the `.dat` is here; the `.stg` and GPS files are in the USGS archive, <https://doi.org/10.5066/P9B9AVKJ> |
 | [`2026-11-11-em-handheld/`](2026-11-11-em-handheld/) | EM induction | Geophex GEM-2 hand-carried at ~1 m, HCP, six frequencies 450 Hz-63 kHz, five short lines over a sand trap (S&T old golf course), CSV export plus raw GPS log. Zero-level offsets and a failed vendor inversion documented |
 
 ```

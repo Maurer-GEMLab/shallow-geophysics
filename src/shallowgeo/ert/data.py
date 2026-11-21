@@ -75,6 +75,8 @@ __all__ = [
     "ERTData",
     "read_res2dinv",
     "read_stg",
+    "read_crp",
+    "read_nmea",
     "geometric_factor",
     "median_depth",
     "dipole_dipole",
@@ -673,6 +675,50 @@ _FEET = 0.3048
 _DETECT_ORDER = (3, 1, 7, 4, 5, 6, 2)
 
 
+def _parse_stg(path: Path):
+    """Header metadata, one dict per reading, and the ``(N, 4, 3)`` ABMN positions in metres."""
+    text = path.read_text(errors="replace").splitlines()
+    header = [ln.strip().lstrip("\ufeff") for ln in text[:3]]
+    if not header or "Sting" not in header[0]:
+        raise ValueError(f"{path.name}: not an AGI Sting/SuperSting .stg file")
+    unit_line = next((h for h in header if h.lower().startswith("unit")), "Unit: meter")
+    unit = unit_line.split(":", 1)[1].strip().lower()
+    if unit.startswith("m"):
+        to_m = 1.0
+    elif unit.startswith("f"):
+        to_m = _FEET
+    else:
+        raise ValueError(f"{path.name}: unknown unit {unit!r}")
+    meta: dict[str, Any] = {"source_file": path.name, "instrument": header[0], "unit": unit}
+    for h in header[1:]:
+        if "Records:" in h:
+            meta["records_in_header"] = int(h.split("Records:")[1].split()[0])
+
+    rows = []
+    for lineno, ln in enumerate(text[3:], start=4):
+        if not ln.strip():
+            continue
+        f = [t.strip() for t in ln.split(",")]
+        if len(f) < 21:
+            raise ValueError(f"{path.name} line {lineno}: expected at least 21 fields, "
+                             f"found {len(f)}")
+        settings = dict(t.split("=", 1) for t in f[21:] if "=" in t)
+        rows.append({
+            "record": int(f[0]), "time": f"{f[2]} {f[3]}", "r_file": float(f[4]),
+            "stack_error": float(f[5]) / 1000.0, "current_ma": float(f[6]),
+            "rhoa_file": float(f[7]), "program": f[8],
+            "xyz": [float(v) for v in f[9:21]],
+            "command": int(settings.get("Cmd", -1)), "channel": int(settings.get("Ch", -1)),
+        })
+    if not rows:
+        raise ValueError(f"{path.name}: no readings")
+    if "records_in_header" in meta and meta["records_in_header"] != len(rows):
+        raise ValueError(f"{path.name}: header says {meta['records_in_header']} records, "
+                         f"found {len(rows)}")
+    P = np.array([r["xyz"] for r in rows]).reshape(-1, 4, 3) * to_m  # (N, ABMN, xyz)
+    return meta, rows, P, to_m
+
+
 def read_stg(path: str | Path, *, n_electrodes: int | None = None,
              first_electrode: int = 0, spacing: float | None = None) -> ERTData:
     """Read the raw measurement file an AGI SuperSting writes (``.stg``).
@@ -716,47 +762,12 @@ def read_stg(path: str | Path, *, n_electrodes: int | None = None,
 
     Assumes a 2-D line: every ``y`` is zero. Positions must sit on a
     regular grid; remote (pole) electrodes are not supported yet.
+
+    For a towed (continuous, boat-borne) line, whose ``.stg`` positions are
+    relative to the moving streamer, use :func:`read_crp`.
     """
     path = Path(path)
-    text = path.read_text(errors="replace").splitlines()
-    header = [ln.strip() for ln in text[:3]]
-    if not header or "Sting" not in header[0]:
-        raise ValueError(f"{path.name}: not an AGI Sting/SuperSting .stg file")
-    unit_line = next((h for h in header if h.lower().startswith("unit")), "Unit: meter")
-    unit = unit_line.split(":", 1)[1].strip().lower()
-    if unit.startswith("m"):
-        to_m = 1.0
-    elif unit.startswith("f"):
-        to_m = _FEET
-    else:
-        raise ValueError(f"{path.name}: unknown unit {unit!r}")
-    meta: dict[str, Any] = {"source_file": path.name, "instrument": header[0], "unit": unit}
-    for h in header[1:]:
-        if "Records:" in h:
-            meta["records_in_header"] = int(h.split("Records:")[1].split()[0])
-
-    rows = []
-    for lineno, ln in enumerate(text[3:], start=4):
-        if not ln.strip():
-            continue
-        f = [t.strip() for t in ln.split(",")]
-        if len(f) < 21:
-            raise ValueError(f"{path.name} line {lineno}: expected at least 21 fields, "
-                             f"found {len(f)}")
-        settings = dict(t.split("=", 1) for t in f[21:] if "=" in t)
-        rows.append({
-            "record": int(f[0]), "time": f"{f[2]} {f[3]}", "r_file": float(f[4]),
-            "stack_error": float(f[5]) / 1000.0, "current_ma": float(f[6]),
-            "rhoa_file": float(f[7]), "program": f[8],
-            "xyz": [float(v) for v in f[9:21]],
-            "command": int(settings.get("Cmd", -1)), "channel": int(settings.get("Ch", -1)),
-        })
-    if not rows:
-        raise ValueError(f"{path.name}: no readings")
-    if "records_in_header" in meta and meta["records_in_header"] != len(rows):
-        raise ValueError(f"{path.name}: header says {meta['records_in_header']} records, "
-                         f"found {len(rows)}")
-    P = np.array([r["xyz"] for r in rows]).reshape(-1, 4, 3) * to_m  # (N, ABMN, xyz)
+    meta, rows, P, to_m = _parse_stg(path)
     if np.any(P[:, :, 1] != 0):
         raise ValueError(f"{path.name}: electrodes have y coordinates; only a straight "
                          "2-D line along x is supported")
@@ -801,6 +812,224 @@ def read_stg(path: str | Path, *, n_electrodes: int | None = None,
                           measurements=len(out), nonpositive=meta["nonpositive"])
     if n_electrodes is not None:
         out = out.trim(n_electrodes, first=first_electrode)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Towed (continuous resistivity profiling) lines
+# ---------------------------------------------------------------------------
+
+_EARTH_RADIUS = 6371000.0
+
+
+def _nmea_angle(value: str, hemi: str, degree_digits: int) -> float:
+    deg = int(value[:degree_digits]) + float(value[degree_digits:]) / 60.0
+    return -deg if hemi in ("S", "W") else deg
+
+
+def read_nmea(path: str | Path) -> pd.DataFrame:
+    """GPS fixes and echo-sounder depths from an NMEA log.
+
+    Reads the ``$GPRMC`` sentences (UTC time, latitude, longitude, speed)
+    with a valid (``A``) fix, and attaches to each fix the water depth of
+    the next ``$SDDPT`` sentence (depth below the transducer, m) when there
+    is one. Columns: ``t`` (seconds since midnight UTC of the first fix),
+    ``lat``, ``lon`` (degrees), ``knots`` and ``water_depth`` (m, NaN where
+    none was logged). Repeated fixes in the same second are dropped.
+    """
+    path = Path(path)
+    fixes, depth = [], {}
+    day0 = None
+    for ln in path.read_text(errors="replace").splitlines():
+        f = ln.strip().split("*")[0].split(",")
+        if f[0].endswith("RMC") and len(f) > 9 and f[2] == "A":
+            hh, mm, ss = int(f[1][:2]), int(f[1][2:4]), float(f[1][4:])
+            t = hh * 3600 + mm * 60 + ss
+            day = f[9]
+            day0 = day if day0 is None else day0
+            if day != day0:  # crossed midnight UTC
+                t += 86400.0
+            fixes.append((t, _nmea_angle(f[3], f[4], 2), _nmea_angle(f[5], f[6], 3),
+                          float(f[7] or "nan")))
+        elif f[0].endswith("DPT") and fixes and len(f) > 1 and f[1]:
+            depth.setdefault(fixes[-1][0], float(f[1]))
+    if not fixes:
+        raise ValueError(f"{path.name}: no valid $GPRMC fixes")
+    g = pd.DataFrame(fixes, columns=["t", "lat", "lon", "knots"])
+    g = g.drop_duplicates("t").sort_values("t").reset_index(drop=True)
+    g["water_depth"] = g["t"].map(depth)
+    return g
+
+
+def _along_track(g: pd.DataFrame, min_step: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Along-track distance at each fix, and the de-jittered track (lat, lon) it was measured on.
+
+    GPS jitter while the boat is slow adds length that was never travelled,
+    so distance is measured between fixes at least ``min_step`` apart.
+    """
+    lat0 = np.radians(g["lat"].mean())
+    e = np.radians(g["lon"].to_numpy()) * _EARTH_RADIUS * np.cos(lat0)
+    n = np.radians(g["lat"].to_numpy()) * _EARTH_RADIUS
+    keep = [0]
+    for i in range(1, len(g)):
+        if np.hypot(e[i] - e[keep[-1]], n[i] - n[keep[-1]]) >= min_step:
+            keep.append(i)
+    keep = np.array(keep)
+    s_keep = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(e[keep]), np.diff(n[keep])))])
+    t = g["t"].to_numpy()
+    s = np.interp(t, t[keep], s_keep)
+    return s, s_keep, keep
+
+
+def read_crp(stg: str | Path, gps: str | Path, *, utc_offset_hours: float,
+             spacing: float | None = None, lead: float = 0.0, min_step: float = 2.0,
+             average: bool = True) -> ERTData:
+    """Read a towed (continuous resistivity profiling) SuperSting line.
+
+    In a CRP survey the SuperSting tows a streamer of electrodes behind a
+    boat and repeats the same few readings every few seconds as it moves.
+    The ``.stg`` positions are relative to the streamer (electrode 1, the
+    one nearest the boat, at 0 and the rest at negative ``x`` behind it),
+    so on their own they say nothing about where along the line a reading
+    was made. This function places each reading with the boat's GPS log:
+
+    1. the time of each reading (instrument clock) is matched to the GPS
+       track (UTC), and the boat's along-track distance interpolated;
+    2. the streamer is laid along the track behind the boat, ``lead``
+       metres from the GPS antenna to electrode 1, and the whole array
+       shifted (not stretched) to the nearest multiple of ``spacing``, so
+       every reading lands on a regular electrode grid with its geometry
+       exact;
+    3. dipole-dipole readings are written with the current pair on the
+       left (B A M N), as :func:`read_res2dinv` and RES2DINV expect. On the
+       streamer the current pair is ahead of the potential pair; by
+       reciprocity swapping the two pairs gives the same transfer
+       resistance;
+    4. with ``average=True`` the repeats that land on the same electrodes
+       are averaged (geometric mean of ``V/I``) and the spread of each
+       group kept as ``scatter`` -- a measured repeat error, which the
+       instrument's own ``stack_error`` (often 0) is not.
+
+    Along-track distance is used as ``x``: a winding river is unrolled
+    into a straight 2-D line.
+
+    Parameters
+    ----------
+    stg, gps
+        The SuperSting ``.stg`` file and the NMEA log recorded with it
+        (see :func:`read_nmea`).
+    utc_offset_hours
+        Hours to add to the instrument clock to get UTC (5 for US Central
+        Daylight Time). Check it: every reading must fall inside the GPS
+        log, and a wrong offset by a whole hour usually does not.
+    spacing
+        Electrode grid (m). Default: the streamer's electrode spacing.
+    lead
+        Distance from the GPS antenna back to electrode 1 (m).
+    min_step
+        Smallest GPS step counted in the along-track distance (m).
+    average
+        Average repeated readings on the same electrodes.
+
+    Returns
+    -------
+    :class:`ERTData` with extra columns ``time`` (seconds, UTC),
+    ``water_depth`` (m, from the echo sounder), ``current_ma`` and, when
+    averaged, ``repeats``, ``scatter`` (standard deviation of ``ln V/I``
+    over the repeats) and ``record`` (first record of each group). The
+    metadata hold the GPS track (``track_s``, ``track_lat``, ``track_lon``)
+    so electrode positions can be mapped back to latitude and longitude
+    with :func:`numpy.interp`.
+    """
+    stg, gps = Path(stg), Path(gps)
+    meta, rows, P, _ = _parse_stg(stg)
+    if np.any(P[:, :, 1] != 0) or np.any(P[:, :, 2] != 0):
+        raise ValueError(f"{stg.name}: streamer positions have y or z coordinates; "
+                         "only an in-line streamer is supported")
+    rel = P[:, :, 0]  # (N, ABMN) along the streamer, m
+    shape = np.unique(np.round(rel, 6), axis=0)
+    gaps = np.diff(np.unique(np.round(rel, 6)))
+    streamer = round(float(gaps.min()), 6) if gaps.size else 1.0
+    spacing = streamer if spacing is None else float(spacing)
+    grid = rel / spacing
+    if np.abs(grid - np.round(grid)).max() > _SNAP_TOL:
+        raise ValueError(f"{stg.name}: streamer electrodes are not on a {spacing:g} m grid")
+    rel = np.round(grid) * spacing
+
+    g = read_nmea(gps)
+    s_fix, s_track, keep = _along_track(g, min_step)
+    stamp = pd.to_datetime([r["time"] for r in rows], format="%Y%m%d %H:%M:%S")
+    secs = (stamp.hour * 3600 + stamp.minute * 60 + stamp.second).to_numpy(float)
+    t = secs + 3600.0 * utc_offset_hours
+    t = np.where(t < g["t"].iloc[0] - 43200, t + 86400, t)  # instrument day vs UTC day
+    t0, t1 = g["t"].iloc[0], g["t"].iloc[-1]
+    outside = (t < t0) | (t > t1)
+    if outside.any():
+        raise ValueError(f"{stg.name}: {outside.sum()} of {len(t)} readings fall outside the "
+                         f"GPS log ({t0 / 3600:.3f}-{t1 / 3600:.3f} h UTC); check "
+                         "utc_offset_hours")
+    s_boat = np.interp(t, g["t"], s_fix)
+    has_depth = g["water_depth"].notna().to_numpy()
+    wd = (np.interp(t, g["t"][has_depth], g["water_depth"][has_depth])
+          if has_depth.any() else np.full(t.size, np.nan))
+
+    anchor = np.round((s_boat - lead) / spacing) * spacing  # electrode 1, on the grid
+    pos = anchor[:, None] + rel
+    x0 = pos.min()
+    idx = np.round((pos - x0) / spacing).astype(int)
+    a, b, m, n = idx.T
+    ahead = (a + b) > (m + n)  # current pair ahead of the potential pair: swap (reciprocity)
+    a, b, m, n = (np.where(ahead, m, a), np.where(ahead, n, b),
+                  np.where(ahead, a, m), np.where(ahead, b, n))
+
+    r = np.array([row["r_file"] for row in rows])
+    df = pd.DataFrame({"a": a, "b": b, "m": m, "n": n, "r": r, "time": t,
+                       "water_depth": wd, "current_ma": [row["current_ma"] for row in rows],
+                       "record": [row["record"] for row in rows],
+                       "rhoa_file": [row["rhoa_file"] for row in rows]})
+    meta["nonpositive"] = int((r <= 0).sum())
+    rf = df["rhoa_file"].to_numpy()
+    k_rel = geometric_factor(*(np.column_stack([rel[:, j], np.zeros(len(rel))])
+                               for j in range(4)))
+    ok = rf != 0
+    if ok.any():
+        meta["rhoa_file_max_rel_diff"] = float(np.max(np.abs(k_rel[ok] * r[ok] - rf[ok])
+                                                      / np.abs(rf[ok])))
+    if average:
+        df = df[df["r"] > 0]
+        lnr = np.log(df["r"])
+        grp = df.assign(lnr=lnr).groupby(list("abmn"), sort=True)
+        df = grp.agg(lnr=("lnr", "mean"), repeats=("lnr", "size"),
+                     scatter=("lnr", lambda v: float(np.std(v, ddof=1)) if len(v) > 1
+                              else np.nan),
+                     time=("time", "mean"), water_depth=("water_depth", "mean"),
+                     current_ma=("current_ma", "median"),
+                     record=("record", "min")).reset_index()
+        df["r"] = np.exp(df.pop("lnr"))
+        df = df.sort_values("time", kind="stable").reset_index(drop=True)
+    n_e = int(idx.max()) + 1
+    electrodes = np.column_stack([spacing * np.arange(n_e), np.zeros(n_e)])
+    k = geometric_factor(*(electrodes[df[c].to_numpy()] for c in "abmn"))
+    df.insert(4, "rhoa", k * df.pop("r").to_numpy())
+    meta.update({
+        "program": rows[0]["program"], "survey": "towed (CRP)", "gps_file": gps.name,
+        "utc_offset_hours": utc_offset_hours, "lead_m": lead,
+        "streamer_spacing": streamer, "streamer_layouts": len(shape),
+        "readings": len(rows), "track_length_m": float(s_track[-1]),
+        "x0_along_track_m": float(x0),
+        # along-track distance of the gridded x = 0 is x0; map x -> (lat, lon) by interp
+        "track_s": s_track - x0, "track_lat": g["lat"].to_numpy()[keep],
+        "track_lon": g["lon"].to_numpy()[keep],
+    })
+    out = ERTData(electrodes, df, spacing, "general", meta["program"], meta)
+    for code in _DETECT_ORDER:
+        if out._is_standard(code):
+            out.array = ARRAYS[code]
+            break
+    out.provenance.record("read_crp", stg=str(stg), gps=str(gps), array=out.array,
+                          readings=len(rows), measurements=len(out),
+                          utc_offset_hours=utc_offset_hours, lead=lead, spacing=spacing,
+                          averaged=average)
     return out
 
 
