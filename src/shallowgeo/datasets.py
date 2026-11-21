@@ -24,7 +24,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-__all__ = ["SHOT_SUFFIXES", "EXAMPLES", "find_shot_files", "example_data"]
+__all__ = ["EXAMPLES", "SHOT_SUFFIXES", "example_data", "find_shot_files"]
 
 SHOT_SUFFIXES = frozenset({".dat", ".sgy", ".segy", ".sg2"})
 
@@ -34,6 +34,7 @@ EXAMPLES = {
     "2610234-ert-line": "SuperSting dipole-dipole, 42 electrodes at 3 ft, RES2DINV .dat (ERT)",
     "2026-11-11-ert-line": "SuperSting dipole-dipole, 21 electrodes at 2 ft, .stg and .dat (ERT)",
     "2026-11-11-em-handheld": "GEM-2 hand-carried at 1 m, HCP, 6 frequencies, 5 lines over a sand trap (EM)",
+    "2018-09-06-usgs-crp-line": "USGS towed SuperSting line, Des Moines River, 0.95 km at 10 m, RES2DINV .dat (ERT)",
 }
 
 REPO_ARCHIVE = "https://github.com/Maurer-GEMLab/shallow-geophysics/archive/refs/heads/main.zip"
@@ -109,15 +110,29 @@ def _local_examples() -> list[Path]:
     return [r / "examples" / "data" for r in roots]
 
 
+def _data_folder(folder: Path) -> Path | None:
+    """A dataset's ``raw/`` folder, or the folder itself if it has a ``dataset.md`` and no ``raw/``."""
+    if (folder / "raw").is_dir():
+        return folder / "raw"
+    if (folder / "dataset.md").is_file():
+        return folder
+    return None
+
+
 def example_data(name: str = "2026-09-25-srt-line", *, download: bool = True,
                  cache: str | Path | None = None) -> Path:
     """The ``raw/`` folder of an example dataset, downloading it if needed.
 
+    A dataset whose files are not kept in their original form here (for
+    example one derived from a public archive, which stays the source of
+    the raw files) has no ``raw/`` folder; its own folder is returned.
+
     Parameters
     ----------
     name
-        One of :data:`EXAMPLES`. Each has a ``dataset.md`` next to its
-        ``raw/`` folder describing the survey and its known problems.
+        One of :data:`EXAMPLES`. Each has a ``dataset.md`` describing the
+        survey and its known problems, next to its ``raw/`` folder or
+        alongside its files.
     download
         Fetch the repository archive from GitHub when the dataset is not
         found locally. The archive is a few megabytes; only the dataset's
@@ -128,13 +143,14 @@ def example_data(name: str = "2026-09-25-srt-line", *, download: bool = True,
     if name not in EXAMPLES:
         raise KeyError(f"no example dataset {name!r}; have {sorted(EXAMPLES)}")
     for base in _local_examples():
-        raw = base / name / "raw"
-        if raw.is_dir():
-            return raw
+        found = _data_folder(base / name)
+        if found is not None:
+            return found
     cache = Path(cache or Path.home() / ".cache" / "shallowgeo").expanduser()
     dest = cache / name
-    if (dest / "raw").is_dir():
-        return dest / "raw"
+    found = _data_folder(dest)
+    if found is not None:
+        return found
     if not download:
         raise FileNotFoundError(
             f"example {name!r} is not in this checkout or in {cache}; "
@@ -157,4 +173,4 @@ def example_data(name: str = "2026-09-25-srt-line", *, download: bool = True,
             shutil.copyfileobj(src, out)
     shutil.rmtree(dest, ignore_errors=True)
     tmp.rename(dest)
-    return dest / "raw"
+    return _data_folder(dest) or dest

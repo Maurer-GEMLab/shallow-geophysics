@@ -107,3 +107,12 @@ class TestExampleData:
         assert not (tmp_path / "2026-09-18-refraction-line").exists()
         example_data("2026-09-25-srt-line", cache=tmp_path)
         assert len(calls) == 1
+
+    def test_dataset_without_raw_folder_is_returned_whole(self, monkeypatch, tmp_path):
+        name = "2018-09-06-usgs-crp-line"
+        folder = tmp_path / "examples" / "data" / name
+        folder.mkdir(parents=True)
+        (folder / "dataset.md").write_text("# md")
+        (folder / "3000.dat").write_text("dat")
+        monkeypatch.setattr(datasets, "_local_examples", lambda: [tmp_path / "examples" / "data"])
+        assert example_data(name, download=False, cache=tmp_path / "cache") == folder

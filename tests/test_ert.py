@@ -17,6 +17,8 @@ from shallowgeo.ert import (
     lambda_sweep,
     make_mesh,
     median_depth,
+    read_crp,
+    read_nmea,
     read_res2dinv,
     read_stg,
     resistivity_tomography,
@@ -28,6 +30,7 @@ from shallowgeo.ert.forward import wavenumbers
 EXAMPLE = (Path(__file__).resolve().parents[1]
            / "examples/data/2610234-ert-line/raw/2610234.dat")
 CLEAN_LINE = Path(__file__).resolve().parents[1] / "examples/data/2026-11-11-ert-line/raw"
+CRP_LINE = Path(__file__).resolve().parents[1] / "examples/data/2018-09-06-usgs-crp-line"
 
 SUPERSTING_HEADER = "Sting/Swift prg: test\n  0.91440\n3\n{n}\n1\n0\n"
 # Dipole-dipole rows as the SuperSting writes them: single-precision noise
@@ -430,3 +433,114 @@ class TestReadStg:
         assert "1 with zero or negative" in printed
         assert "dropped 1 kept readings" in printed
         assert len(read_res2dinv(out)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Towed (CRP) lines
+# ---------------------------------------------------------------------------
+
+# A 5-electrode streamer at 10 m, electrode 1 nearest the boat: current on
+# electrodes 2-1 (A at -10, B at 0), potentials 3-4 (n = 1) and 4-5 (n = 2).
+STREAMER = [(-10.0, 0.0, -20.0, -30.0), (-10.0, 0.0, -30.0, -40.0)]
+LAT0 = 41.65
+
+
+def _crp_files(tmp_path, injections, *, speed=4.0, start="150000"):
+    """A towed-line .stg (instrument on UTC-5) and its NMEA log, boat heading east.
+
+    ``injections`` are (seconds after 15:00:00 UTC, [V/I for each streamer reading]).
+    """
+    m_per_deg = np.radians(1.0) * 6371000.0 * np.cos(np.radians(LAT0))
+    gps = []
+    for t in range(21):
+        lon = -93.0 + speed * t / m_per_deg
+        deg = int(abs(lon))
+        ddmm = f"{deg:03d}{(abs(lon) - deg) * 60:09.6f}"
+        gps.append(f"$GPRMC,15{t // 60:02d}{t % 60:02d},A,4139.0000,N,{ddmm},W,7.8,90.0,"
+                   f"060918,2.8,E*00")
+        gps.append(f"$SDDPT,{1.0 + 0.1 * t:.1f},0.0*00")
+    g = tmp_path / "line.gps"
+    g.write_text("\n".join(gps) + "\n")
+    lines, rec = [], 0
+    for t, rs in injections:
+        for (xa, xb, xm, xn), r in zip(STREAMER, rs):
+            rec += 1
+            k = float(geometric_factor(*(np.array([[x, 0.0]]) for x in (xa, xb, xm, xn)))[0])
+            xyz = ",".join(f"{x:12.5E}, 0.00000E+00, 0.00000E+00" for x in (xa, xb, xm, xn))
+            lines.append(f"{rec:4d},USER   ,20180906,10:00:{t:02d},{r:12.5E},   0,1000,"
+                         f"{k * r:12.5E},3000     ,{xyz},Cmd=1,HV=189,Cyk=1,MTime=1.2,"
+                         f"Gain=10,Ch=1")
+    head = ("Advanced Geosciences, Inc. SuperSting R8-IP Resistivity meter. S/N: SS0 Type: 3D\n"
+            f"Firmware version: 01.03.15E Survey period: 20180906 Records: {rec}\n"
+            "Unit: meter\n")
+    stg = tmp_path / "line.stg"
+    stg.write_text(head + "\n".join(lines) + "\n")
+    return stg, g
+
+
+# Boat at 4 m/s: 8 m, 20 m, 28 m and 32 m along the track. Electrode 1
+# snaps to 10, 20, 30 and 30 m: the last two injections repeat each other.
+CRP_INJECTIONS = [(2, [1.0, 0.2]), (5, [2.0, 0.4]), (7, [3.0, 0.5]), (8, [3.3, 0.6])]
+
+
+class TestReadCrp:
+    def test_nmea_fixes_and_depths(self, tmp_path):
+        _, gps = _crp_files(tmp_path, CRP_INJECTIONS)
+        g = read_nmea(gps)
+        assert len(g) == 21 and g["t"].iloc[0] == 15 * 3600
+        assert g["lat"].iloc[0] == pytest.approx(41.65)
+        assert g["water_depth"].iloc[10] == pytest.approx(2.0)
+
+    def test_readings_are_placed_on_the_track(self, tmp_path):
+        d = read_crp(*_crp_files(tmp_path, CRP_INJECTIONS), utc_offset_hours=5)
+        assert d.array == "dipole-dipole" and d.spacing == 10.0
+        # electrode 5 of the first injection (10 - 40 = -30 m) is the new x = 0
+        assert d.metadata["x0_along_track_m"] == pytest.approx(-30.0)
+        assert d.n_electrodes == 7
+        assert len(d) == 6
+        first = d.data[d.data["time"] == d.data["time"].min()]
+        # B A M N from the left: the potential pair, now the current pair by reciprocity
+        assert sorted(first[list("bamn")].itertuples(index=False, name=None)) == [
+            (0, 1, 3, 4), (1, 2, 3, 4)]
+        assert list(d.data["repeats"]) == [1, 1, 1, 1, 2, 2]
+        last = d.data[(d.data["a"] == 4) & (d.data["m"] == 5)].iloc[0]
+        assert last["r"] == pytest.approx(np.sqrt(3.0 * 3.3))
+        assert last["water_depth"] == pytest.approx(1.75)
+        assert np.allclose(d.data["rhoa"], d.data["k"] * d.data["r"])
+        assert d.metadata["rhoa_file_max_rel_diff"] < 1e-5
+        assert d.metadata["track_length_m"] == pytest.approx(80.0, rel=1e-3)
+
+    def test_without_averaging_every_reading_is_kept(self, tmp_path):
+        d = read_crp(*_crp_files(tmp_path, CRP_INJECTIONS), utc_offset_hours=5,
+                     average=False)
+        assert len(d) == 8 and "repeats" not in d.data
+
+    def test_lead_moves_the_streamer_back(self, tmp_path):
+        files = _crp_files(tmp_path, CRP_INJECTIONS)
+        d0 = read_crp(*files, utc_offset_hours=5)
+        d1 = read_crp(*files, utc_offset_hours=5, lead=10.0)
+        assert d1.metadata["x0_along_track_m"] == pytest.approx(
+            d0.metadata["x0_along_track_m"] - 10.0)
+
+    def test_wrong_clock_offset_is_an_error(self, tmp_path):
+        with pytest.raises(ValueError, match="outside the GPS log"):
+            read_crp(*_crp_files(tmp_path, CRP_INJECTIONS), utc_offset_hours=4)
+
+    def test_round_trips_through_res2dinv(self, tmp_path):
+        d = read_crp(*_crp_files(tmp_path, CRP_INJECTIONS), utc_offset_hours=5)
+        back = read_res2dinv(d.to_res2dinv(tmp_path / "crp.dat"))
+        assert len(back) == len(d)
+        assert np.allclose(np.sort(back.data["rhoa"]), np.sort(d.data["rhoa"]), rtol=1e-6)
+
+
+@pytest.mark.skipif(not CRP_LINE.exists(), reason="example dataset not present")
+class TestUsgsCrpLine:
+    """2018-09-06-usgs-crp-line: the numbers its dataset.md quotes."""
+
+    def test_gridded_line(self):
+        d = read_res2dinv(CRP_LINE / "3000.dat")
+        assert d.array == "dipole-dipole" and d.spacing == 10.0
+        assert len(d) == 680 and d.n_electrodes == 95
+        assert (d.data["rhoa"] > 0).all()
+        sep = (d.data["m"] - d.data["a"]) // (d.data["a"] - d.data["b"]).abs()
+        assert sorted(sep.unique()) == list(range(1, 9))
