@@ -1,4 +1,4 @@
-"""Regularised linear inversion of gravity or magnetic data on a 2-D mesh.
+"""Regularised linear inversion of gravity or magnetic data on a 2-D or 3-D mesh.
 
 The forward problem is linear, ``d = G m``, and badly underdetermined: a
 few dozen stations, thousands of cells. The inversion picks, out of all the
@@ -9,6 +9,8 @@ smoothest:
     phi_d = || (G m - d) / sigma ||^2
     phi_m = alpha_s || w m ||^2 + alpha_x || d(w m)/dx ||^2 + alpha_z || d(w m)/dz ||^2
 
+(plus an ``alpha_y`` term on a :class:`Mesh3D`)
+
 (Li and Oldenburg, 1996, 1998). ``w`` is a weight per cell. Without it the
 smallest model puts everything at the surface, because a shallow cell can
 explain a datum with a much smaller value than a deep one. The cure is a
@@ -18,7 +20,8 @@ depth weight that falls off as the square root of the kernel,
 
 with ``nu = 1/2`` for 2-D gravity (kernel ~ 1/r) and ``nu = 1`` for 2-D
 magnetics (kernel ~ 1/r^2). In 3-D the kernels fall off one power faster and
-so do the weights.
+so do the weights: ``nu = 1`` for gravity, ``3/2`` for magnetics
+(:data:`DEPTH_EXPONENT_3D`), chosen automatically for a :class:`Mesh3D`.
 
 ``beta`` is chosen so that ``phi_d`` equals the number of data -- each
 datum fit to about one standard deviation, the *discrepancy principle*.
@@ -48,21 +51,24 @@ from scipy import sparse
 from scipy.optimize import brentq, minimize
 from scipy.sparse.linalg import splu
 
-from .mesh import Mesh2D
+from .mesh import Mesh2D, Mesh3D
 
-__all__ = ["DEPTH_EXPONENT", "InversionResult", "LinearInversion", "depth_weights"]
+__all__ = ["DEPTH_EXPONENT", "DEPTH_EXPONENT_3D", "InversionResult", "LinearInversion",
+           "depth_weights"]
 
 #: Depth-weighting exponents that balance the decay of 2-D kernels.
 DEPTH_EXPONENT = {"gravity": 0.5, "magnetics": 1.0}
+#: The same for 3-D kernels, which fall off one power of distance faster.
+DEPTH_EXPONENT_3D = {"gravity": 1.0, "magnetics": 1.5}
 
 
-def depth_weights(mesh: Mesh2D, exponent: float, z0: float = 0.0) -> np.ndarray:
+def depth_weights(mesh: Mesh2D | Mesh3D, exponent: float, z0: float = 0.0) -> np.ndarray:
     """``(z + z0)^(-exponent)`` at every cell centre, scaled to a maximum of 1.
 
     ``z0`` is the station height, so the weight follows the distance from the
     sensor rather than from the ground.
     """
-    _, z = mesh.centers()
+    z = mesh.centers()[-1]
     w = (z + z0) ** (-float(exponent))
     return w / w.max()
 
@@ -88,6 +94,29 @@ def _difference_operators(mesh: Mesh2D) -> tuple[sparse.csr_matrix, sparse.csr_m
     Dz = sparse.csr_matrix((np.r_[-s, s], (np.r_[rows, rows], np.r_[a, b])),
                            shape=(a.size, mesh.n_cells))
     return Dx, Dz
+
+
+def _difference_operators_3d(mesh: Mesh3D) -> list[sparse.csr_matrix]:
+    """First differences along x, y and z, each scaled so ``||D m||^2``
+    approximates the volume integral of that squared derivative."""
+    nz, ny, nx = mesh.shape
+    idx = np.arange(mesh.n_cells).reshape(nz, ny, nx)
+    dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
+    ops = []
+    for axis, centres in ((2, mesh.x_centers), (1, mesh.y_centers), (0, mesh.z_centers)):
+        lo = [slice(None)] * 3
+        hi = [slice(None)] * 3
+        lo[axis], hi[axis] = slice(None, -1), slice(1, None)
+        a, b = idx[tuple(lo)].ravel(), idx[tuple(hi)].ravel()
+        # face area / centre spacing, broadcast to the (nz, ny, nx) pairs
+        sizes = [dz[:, None, None], dy[None, :, None], dx[None, None, :]]
+        sizes[axis] = 1 / np.diff(centres).reshape([-1 if k == axis else 1 for k in range(3)])
+        s = np.sqrt(sizes[0] * sizes[1] * sizes[2])
+        s = np.broadcast_to(s, idx[tuple(lo)].shape).ravel()
+        rows = np.arange(a.size)
+        ops.append(sparse.csr_matrix((np.r_[-s, s], (np.r_[rows, rows], np.r_[a, b])),
+                                     shape=(a.size, mesh.n_cells)))
+    return ops
 
 
 @dataclass
@@ -116,7 +145,8 @@ class LinearInversion:
     ----------
     mesh, G
         The mesh and the forward matrix for it (``gravity_kernel`` or
-        ``magnetic_kernel``).
+        ``magnetic_kernel`` on a :class:`Mesh2D`, ``gravity_kernel_3d`` on a
+        :class:`Mesh3D`).
     data, std
         Observed data and their standard deviations, same units as ``G``.
     length
@@ -127,15 +157,15 @@ class LinearInversion:
         depth than along the profile.
     weighting
         ``"gravity"`` or ``"magnetics"`` for the depth weight that suits that
-        kernel (see :func:`depth_weights`), ``"none"``, or an array of one
-        weight per cell.
+        kernel in 2-D or 3-D (see :func:`depth_weights`), ``"none"``, or an
+        array of one weight per cell.
     z0
         Station height for the depth weight, metres.
     """
 
     def __init__(
         self,
-        mesh: Mesh2D,
+        mesh: Mesh2D | Mesh3D,
         G: np.ndarray,
         data,
         std,
@@ -155,9 +185,11 @@ class LinearInversion:
         if np.any(self.std <= 0):
             raise ValueError("std must be positive")
 
+        is_3d = isinstance(mesh, Mesh3D)
+        exponents = DEPTH_EXPONENT_3D if is_3d else DEPTH_EXPONENT
         if isinstance(weighting, str):
-            if weighting in DEPTH_EXPONENT:
-                w = depth_weights(mesh, DEPTH_EXPONENT[weighting], z0)
+            if weighting in exponents:
+                w = depth_weights(mesh, exponents[weighting], z0)
             elif weighting == "none":
                 w = np.ones(mesh.n_cells)
             else:
@@ -170,7 +202,14 @@ class LinearInversion:
 
         self.length = float(length)
         self.z_smooth = float(z_smooth)
-        self._Dx, self._Dz = _difference_operators(mesh)
+        if is_3d:
+            self._D = _difference_operators_3d(mesh)
+            self._D_weight = [1.0, 1.0, self.z_smooth]
+            self._size = mesh.volume
+        else:
+            self._D = list(_difference_operators(mesh))
+            self._D_weight = [1.0, self.z_smooth]
+            self._size = mesh.area
         self._set_operator(self._operator())
 
     def _operator(self, support=None, smooth: float = 1.0) -> sparse.csr_matrix:
@@ -178,14 +217,13 @@ class LinearInversion:
         smallness term cell by cell (compact inversion); ``smooth`` scales
         the two gradient terms."""
         W = sparse.diags(self.weights)
-        s = np.sqrt(self.mesh.area) / self.length
+        s = np.sqrt(self._size) / self.length
         if support is not None:
             s = s * support
-        return sparse.vstack([
-            sparse.diags(s) @ W,
-            smooth * self._Dx @ W,
-            smooth * np.sqrt(self.z_smooth) * self._Dz @ W,
-        ]).tocsr()
+        return sparse.vstack(
+            [sparse.diags(s) @ W]
+            + [smooth * np.sqrt(a) * D @ W for D, a in zip(self._D, self._D_weight)]
+        ).tocsr()
 
     def _set_operator(self, L: sparse.csr_matrix) -> None:
         self.L = L
