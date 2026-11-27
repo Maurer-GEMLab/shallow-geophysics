@@ -14,6 +14,7 @@ both in Colab and on a local kernel from `pixi run -e dev jupyter lab`.
 | `ert_synthetic_inversion.ipynb` | Resistivity forward and inverse problem on synthetic ground: an air-filled cave in layered soil, clay and limestone, and soil over pinnacled, karsted limestone with a sinkhole throat and a small void; noisy synthetic data from a finer mesh (no inverse crime); a λ slider comparing true against inverted resistivity and observed against predicted data; χ², L-curve and the truth's own model error; what a smooth inversion cannot recover; a live inversion with λ and vertical smoothing | synthetic (`ert`) |
 | `em_gem2.ipynb` | EM induction with a GEM-2: the platform (hand, sled, drone) and why its height matters, acquisition QC, signal against noise per frequency, transients and spikes, what frequency does and does not do (induction number, cumulative response), apparent conductivity checked against the instrument's own, zero-level offsets, drift, heading check, maps and profiles, judging the vendor's layered inversion | `examples/data/2026-11-11-em-handheld/` (five hand-carried lines over a sand trap, six frequencies), or the student's own GEM-2 export |
 | `gravity_magnetics_tunnel.ipynb` | Gravity and magnetics forward and inverse problem for a 2-D tunnel (4 × 3 m, roof 4 m deep under 1 m of soil): why flat layers are invisible, prism kernels, what one station sees, noise, non-uniqueness, depth weighting, choosing β, bounds, compact (minimum-support) inversion, what the data do and do not determine | synthetic (`potentialfields`) |
+| `gravity_simple_bodies.ipynb` | Gravity of simple bodies: the mathematics of the 2-D line mass and rectangular prism and the 3-D point mass, sphere and vertical cylinder, chosen so that all five anomalies match; noisy synthetic data; non-linear least-squares fits with the right shape (uncertainties, correlations, a parameter that cannot be resolved, repeat-survey scatter) and the wrong one; smooth gridded inversion in 2-D and 3-D, reading its residuals, and what gravity does and does not determine | synthetic (`potentialfields`) |
 | `passive_shear_wave_colab.ipynb` | Passive surface wave end to end: read and merge ATOM-1C `.atm` nodes, QC, array resolution limits, SPAC and passive-MASW dispersion, pick, invert for Vs | ATOM-1C field data, uploaded by the student |
 
 ## Planned
@@ -116,3 +117,22 @@ is U-shaped, and χ² = 1 lands slightly on the smooth side of its minimum.
 The λ sweep (nine inversions per model) takes about three minutes; after
 that the slider only looks results up. Each run of the live inversion in
 the last section takes a few seconds.
+
+
+## A note on `gravity_simple_bodies.ipynb`
+
+The five bodies are matched on purpose: within each dimension the anomalies
+differ by about a microgal at most, against 5 µGal of noise, so every
+section ends up making the same point from a different side. The fits recover
+what the data determine — position, depth to the centre of mass, excess
+mass — and wander along a curve for what they do not (prism width against
+thickness, cylinder radius against length, sphere radius against density
+contrast, which is exactly singular). Fitting the wrong shape works just as
+well, and one profile across a 3-D body read as 2-D puts it a fifth too
+shallow. The gridded inversion reaches χ²/N = 1 while under-fitting the
+stations over the peak, which the notebook uses to make students read the
+residual map rather than the misfit number. The noise seed (111) was chosen
+so that the true model's own χ²/N is close to 1 for every data set; with an
+unlucky draw the discrepancy principle under-fits badly, which is itself
+worth showing a class by changing `SEED`. It runs in about forty seconds,
+six of them per 3-D inversion set-up.
